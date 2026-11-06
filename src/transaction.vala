@@ -25,6 +25,8 @@ namespace Pamac {
 		unowned MainContext context;
 		// run transaction data
 		AlpmUtils alpm_utils;
+		// STEP4_SONAME_NORMAL_FALLBACK: true only after explicit Build-and-verify consent.
+		bool verify_after_aur_build;
 		bool sysupgrading;
 		bool force_refresh;
 		int trans_flags;
@@ -220,6 +222,15 @@ namespace Pamac {
 		protected virtual async bool ask_edit_build_files (TransactionSummary summary) {
 			// no edit
 			return false;
+		}
+
+		// Conservative by default; CLI may override to ask for consent.
+		protected virtual async bool ask_unverified_aur_soname_build (GenericArray<string> warnings) {
+			return false;
+		}
+		// Noninteractive clients may fail closed instead of accepting a removal.
+		protected virtual bool permit_normal_aur_soname_fallback () {
+			return true;
 		}
 
 		protected virtual async void edit_build_files (GenericArray<string> pkgnames) {
@@ -1075,6 +1086,7 @@ namespace Pamac {
 				return false;
 			}
 			bool success = true;
+			verify_after_aur_build = false;
 			if (sysupgrading ||
 				to_install.length > 0 ||
 				to_remove.length > 0 ||
@@ -1457,6 +1469,33 @@ namespace Pamac {
 			set_flags ();
 			bool success = yield trans_check_prepare (out summary);
 			stop_preparing ();
+			if (!success && to_build.length > 0 &&
+			    alpm_utils.provisional_soname_deps.length > 0) {
+				bool accepted = yield ask_unverified_aur_soname_build (alpm_utils.provisional_soname_warnings);
+				if (accepted) {
+					// Exact temporary assumptions ONLY on the preliminary handle.
+					alpm_utils.allow_provisional_soname_build = true;
+					start_preparing ();
+					success = yield trans_check_prepare (out summary);
+					stop_preparing ();
+					alpm_utils.allow_provisional_soname_build = false;
+					if (success) {
+						verify_after_aur_build = true;
+					}
+				} else {
+					// No means use normal Pamac dependency resolution, NOT cancel.
+					// Noninteractive modes may explicitly refuse that fallback.
+					if (!permit_normal_aur_soname_fallback ()) {
+						emit_action (dgettext (null, "Transaction cancelled") + ".");
+						return false;
+					}
+					alpm_utils.use_normal_aur_soname_resolution = true;
+					start_preparing ();
+					success = yield trans_check_prepare (out summary);
+					stop_preparing ();
+					alpm_utils.use_normal_aur_soname_resolution = false;
+				}
+			}
 			if (!success) {
 				if (to_build.length > 0) {
 					var empty_summary = new TransactionSummary ();
@@ -1649,7 +1688,8 @@ namespace Pamac {
 																	to_load_remote_array,
 																	to_install_as_dep_array,
 																	ignorepkgs_array,
-																	overwrite_files_array);
+																	overwrite_files_array,
+																	false);
 					} catch (Error e) {
 						var details = new GenericArray<string> (1);
 						details.add ("trans_run: %s".printf (e.message));
@@ -2148,7 +2188,8 @@ namespace Pamac {
 															new GenericArray<string> (), // to_load_remote
 															to_install_as_dep_array,
 															new GenericArray<string> (), // ignorepkgs
-															new GenericArray<string> ()); // overwrite_files
+															new GenericArray<string> (), // overwrite_files
+											verify_after_aur_build); // final-build SONAME policy
 			} catch (Error e) {
 				var details = new GenericArray<string> (1);
 				details.add ("trans_run: %s".printf (e.message));

@@ -55,6 +55,14 @@ namespace Pamac {
 		public string current_action;
 		public double current_progress;
 		public GenericArray<string> unresolvables;
+		// Data from the preliminary AUR check; never used by the real transaction.
+		public GenericArray<string> provisional_soname_deps;
+		public GenericArray<string> provisional_soname_warnings;
+		public bool allow_provisional_soname_build;
+		// STEP4_SONAME_NORMAL_FALLBACK: choose Pamac's original pre-build resolver on No.
+		public bool use_normal_aur_soname_resolution;
+		// Set only by the opt-in verified final-installation entry point.
+		bool reject_soname_autoremoval;
 		// download data
 		public uint64 total_download;
 		public uint64 already_downloaded;
@@ -96,6 +104,9 @@ namespace Pamac {
 			ignorepkgs = new GenericSet<string?> (str_hash, str_equal);
 			overwrite_files = new GenericSet<string?> (str_hash, str_equal);
 			unresolvables = new GenericArray<string> ();
+			provisional_soname_deps = new GenericArray<string> ();
+			provisional_soname_warnings = new GenericArray<string> ();
+			allow_provisional_soname_build = false;
 			current_filename = "";
 			current_action = "";
 			current_status = "";
@@ -735,6 +746,7 @@ namespace Pamac {
 			if (alpm_handle.trans_prepare (out err_data) == -1) {
 				var details = new GenericArray<string> ();
 				Alpm.Errno err_no = alpm_handle.errno ();
+				bool only_provisional_sonames = err_no == Alpm.Errno.UNSATISFIED_DEPS;
 				switch (err_no) {
 					case 0:
 						break;
@@ -764,11 +776,38 @@ namespace Pamac {
 							unowned Alpm.List<unowned Alpm.Package> trans_add = alpm_handle.trans_to_add ();
 							unowned Alpm.Package pkg;
 							if (miss->causingpkg == null) {
+								only_provisional_sonames = false;
 								/* package being installed/upgraded has unresolved dependency */
 								details.add ("- " + _("unable to satisfy dependency '%1$s' required by %2$s").printf (depstring, miss->target));
 							} else if ((pkg = Alpm.pkg_find (trans_add, miss->causingpkg)) != null) {
 								/* upgrading a package breaks a local dependency */
-								if (commit_retries < 1) {
+								// The fake AUR database has only preliminary .SRCINFO
+								// provides, before makepkg generates versioned SONAMEs.
+								bool provisional_aur_soname = false;
+								if (!use_normal_aur_soname_resolution && pkg.db != null && pkg.db.name == "pamac_aur" && ".so=" in depstring) {
+									string soname = depstring.split ("=", 2)[0];
+									unowned Alpm.List<unowned Alpm.Depend> provides = pkg.provides;
+									while (provides != null) {
+										if (provides.data.compute_string () == soname) {
+											provisional_aur_soname = true;
+											break;
+										}
+										provides.next ();
+									}
+								}
+								if (provisional_aur_soname) {
+									if (!provisional_soname_deps.find_with_equal_func (depstring, str_equal, null)) {
+										provisional_soname_deps.add (depstring);
+										provisional_soname_warnings.add (_("%1$s may not provide %2$s (required by %3$s)").printf (miss->causingpkg, depstring, miss->target));
+									}
+									details.add ("- " + _("AUR package %1$s has an unverified shared-library provision for %2$s; keeping %3$s installed").printf (miss->causingpkg, depstring, miss->target));
+								} else if (reject_soname_autoremoval && ".so=" in depstring) {
+									only_provisional_sonames = false;
+									// For a completed package, reject a broken SONAME provision.
+									// Do not auto-remove an installed dependent to make it installable.
+									details.add ("- " + _("installing %1$s (%2$s) breaks dependency '%3$s' required by %4$s; refusing automatic removal of dependent").printf (miss->causingpkg, pkg.version, depstring, miss->target));
+								} else if (commit_retries < 1) {
+									only_provisional_sonames = false;
 									do_emit_warning (_("Warning") + ": " + _("installing %1$s (%2$s) breaks dependency '%3$s' required by %4$s").printf (miss->causingpkg, pkg.version, depstring, miss->target));
 									do_emit_warning (_("Add %s to remove").printf (miss->target));
 									required_to_remove.add (miss->target);
@@ -776,10 +815,12 @@ namespace Pamac {
 										need_retry = true;
 									}
 								} else {
+									only_provisional_sonames = false;
 									details.add ("- " + _("installing %1$s (%2$s) breaks dependency '%3$s' required by %4$s").printf (miss->causingpkg, pkg.version, depstring, miss->target));
 									details.add ("- " + _("if possible, remove %s and retry").printf (miss->target));
 								}
 							} else {
+								only_provisional_sonames = false;
 								// we don't want to retry if cascade option is not used
 								/* removing a package breaks a local dependency */
 								//if (commit_retries < 1) {
@@ -797,6 +838,10 @@ namespace Pamac {
 							depstrings.add ((owned) depstring);
 							delete miss;
 							list.next ();
+							}
+						if (!only_provisional_sonames) {
+								provisional_soname_deps = new GenericArray<string> ();
+								provisional_soname_warnings = new GenericArray<string> ();
 						}
 						break;
 					case Alpm.Errno.CONFLICTING_DEPS:
@@ -818,13 +863,20 @@ namespace Pamac {
 						details.add (Alpm.strerror (err_no));
 						break;
 				}
+				if (err_no != Alpm.Errno.UNSATISFIED_DEPS) {
+					provisional_soname_deps = new GenericArray<string> ();
+					provisional_soname_warnings = new GenericArray<string> ();
+				}
 				if (need_retry && commit_retries < 1) {
 					// retry
 					commit_retries++;
 					success = trans_prepare_real (alpm_handle);
 				} else {
 					trans_release (alpm_handle);
-					if (emit_error) {
+					// Present recoverable uncertainty on the main thread first.
+					if (emit_error && !(only_provisional_sonames &&
+					                    provisional_soname_deps.length > 0 &&
+					                    !allow_provisional_soname_build)) {
 						do_emit_error (_("Failed to prepare transaction"), details);
 					}
 					success = false;
@@ -904,10 +956,25 @@ namespace Pamac {
 										GenericSet<string?> ignorepkgs,
 										GenericSet<string?> overwrite_files,
 										ref TransactionSummary summary) {
+			// Reset on first attempt; retain only the exact failed dependencies on retry.
+			if (!allow_provisional_soname_build) {
+				provisional_soname_deps = new GenericArray<string> ();
+				provisional_soname_warnings = new GenericArray<string> ();
+			}
 			// use an tmp handle with no callback to avoid double prepare signals
 			var tmp_handle = get_handle (false, true, false);
 			if (tmp_handle == null) {
 				return false;
+			}
+			// These assumptions exist ONLY on the disposable preflight handle.
+			// The actual install uses a separate handle without them.
+			if (allow_provisional_soname_build && to_build.length > 0) {
+				foreach (unowned string depstring in provisional_soname_deps) {
+					Alpm.Depend? assumed = Alpm.Depend.from_string (depstring);
+					if (assumed == null || tmp_handle.add_assumeinstalled (assumed) != 0) {
+						return false;
+					}
+				}
 			}
 			// add question callback for replaces/conflicts/corrupted pkgs and import keys
 			tmp_handle.set_questioncb (cb_question, this);
@@ -991,7 +1058,8 @@ namespace Pamac {
 								string[] to_load_remote,
 								string[] to_install_as_dep,
 								string[] ignorepkgs,
-								string[] overwrite_files) {
+								string[] overwrite_files,
+								bool reject_soname_autoremoval) {
 			this.sender = sender;
 			this.sysupgrade = sysupgrade;
 			this.enable_downgrade = enable_downgrade;
@@ -1031,7 +1099,10 @@ namespace Pamac {
 			foreach (unowned string name in overwrite_files) {
 				this.overwrite_files.add (name);
 			}
-			return trans_run_real (alpm_handle);
+			this.reject_soname_autoremoval = reject_soname_autoremoval;
+			bool policy_run_success = trans_run_real (alpm_handle);
+			this.reject_soname_autoremoval = false;
+			return policy_run_success;
 		}
 
 		bool trans_run_real (Alpm.Handle? alpm_handle) {

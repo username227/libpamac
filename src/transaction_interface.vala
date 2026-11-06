@@ -41,7 +41,8 @@ namespace Pamac {
 										GenericArray<string> to_load_remote,
 										GenericArray<string> to_install_as_dep,
 										GenericArray<string> ignorepkgs,
-										GenericArray<string> overwrite_files) throws Error;
+										GenericArray<string> overwrite_files,
+										bool reject_soname_autoremoval) throws Error;
 		public abstract void trans_cancel () throws Error;
 		public abstract void quit_daemon () throws Error;
 		public signal void emit_action (string action);

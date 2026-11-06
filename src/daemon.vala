@@ -658,6 +658,40 @@ namespace Pamac {
 									string[] ignorepkgs,
 									string[] overwrite_files,
 									BusName sender) throws Error {
+			start_trans_run_policy (sysupgrade, enable_downgrade, simple_install, keep_built_pkgs, trans_flags, to_install, to_remove, to_load_local, to_load_remote, to_install_as_dep, ignorepkgs, overwrite_files, false, sender);
+		}
+
+		// Only opt-in Build-and-verify should use this new DBus method.
+		public void start_trans_run_verified (bool sysupgrade,
+									bool enable_downgrade,
+									bool simple_install,
+									bool keep_built_pkgs,
+									int trans_flags,
+									string[] to_install,
+									string[] to_remove,
+									string[] to_load_local,
+									string[] to_load_remote,
+									string[] to_install_as_dep,
+									string[] ignorepkgs,
+									string[] overwrite_files,
+									BusName sender) throws Error {
+			start_trans_run_policy (sysupgrade, enable_downgrade, simple_install, keep_built_pkgs, trans_flags, to_install, to_remove, to_load_local, to_load_remote, to_install_as_dep, ignorepkgs, overwrite_files, true, sender);
+		}
+
+		void start_trans_run_policy (bool sysupgrade,
+									bool enable_downgrade,
+									bool simple_install,
+									bool keep_built_pkgs,
+									int trans_flags,
+									string[] to_install,
+									string[] to_remove,
+									string[] to_load_local,
+									string[] to_load_remote,
+									string[] to_install_as_dep,
+									string[] ignorepkgs,
+									string[] overwrite_files,
+									bool reject_soname_autoremoval,
+									BusName sender) throws Error {
 			string[] to_install_copy = to_install;
 			string[] to_remove_copy = to_remove;
 			string[] to_load_local_copy = to_load_local;
@@ -696,7 +730,8 @@ namespace Pamac {
 															to_load_remote_copy,
 															to_install_as_dep_copy,
 															ignorepkgs_copy,
-															overwrite_files_copy);
+															overwrite_files_copy,
+															reject_soname_autoremoval);
 										return 0;
 									});
 									thread.join ();

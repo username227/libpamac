@@ -265,10 +265,12 @@ namespace Pamac {
 								GenericArray<string> to_load_remote,
 								GenericArray<string> to_install_as_dep,
 								GenericArray<string> ignorepkgs,
-								GenericArray<string> overwrite_files) throws Error {
+								GenericArray<string> overwrite_files,
+								bool reject_soname_autoremoval) throws Error {
 			trans_run_callback = trans_run.callback;
 			try {
-				system_daemon.start_trans_run (sysupgrade,
+				if (reject_soname_autoremoval) {
+					system_daemon.start_trans_run_verified (sysupgrade,
 												enable_downgrade,
 												simple_install,
 												keep_built_pkgs,
@@ -280,6 +282,20 @@ namespace Pamac {
 												to_install_as_dep.data,
 												ignorepkgs.data,
 												overwrite_files.data);
+				} else {
+					system_daemon.start_trans_run (sysupgrade,
+												enable_downgrade,
+												simple_install,
+												keep_built_pkgs,
+												trans_flags,
+												to_install.data,
+												to_remove.data,
+												to_load_local.data,
+												to_load_remote.data,
+												to_install_as_dep.data,
+												ignorepkgs.data,
+												overwrite_files.data);
+				}
 				yield;
 				return trans_run_success;
 			} catch (Error e) {

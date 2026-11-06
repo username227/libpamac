@@ -289,7 +289,8 @@ namespace Pamac {
 							GenericArray<string> to_load_remote,
 							GenericArray<string> to_install_as_dep,
 							GenericArray<string> ignorepkgs,
-							GenericArray<string> overwrite_files) {
+							GenericArray<string> overwrite_files,
+								bool reject_soname_autoremoval) {
 			bool success = yield wait_for_lock ();
 			if (!success) {
 				// cancelled
@@ -313,7 +314,8 @@ namespace Pamac {
 																to_load_remote.data,
 																to_install_as_dep.data,
 																ignorepkgs.data,
-																overwrite_files.data);
+																overwrite_files.data,
+																reject_soname_autoremoval);
 							return 0;
 						});
 						thread.join ();
@@ -342,7 +344,8 @@ namespace Pamac {
 								GenericArray<string> to_load_remote,
 								GenericArray<string> to_install_as_dep,
 								GenericArray<string> ignorepkgs,
-								GenericArray<string> overwrite_files) {
+								GenericArray<string> overwrite_files,
+								bool reject_soname_autoremoval) {
 			if (alpm_utils.downloading_updates) {
 				alpm_utils.cancellable.cancel ();
 				// let time to cancel download updates
@@ -365,7 +368,8 @@ namespace Pamac {
 								to_load_remote,
 								to_install_as_dep,
 								ignorepkgs,
-								overwrite_files);
+								overwrite_files,
+								reject_soname_autoremoval);
 			return trans_run_success;
 		}
 

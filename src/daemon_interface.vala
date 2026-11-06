@@ -48,6 +48,18 @@ namespace Pamac {
 											string[] to_install_as_dep,
 											string[] ignorepkgs,
 											string[] overwrite_files) throws Error;
+		public abstract void start_trans_run_verified (bool sysupgrade,
+											bool enable_downgrade,
+											bool simple_install,
+											bool keep_built_pkgs,
+											int trans_flags,
+											string[] to_install,
+											string[] to_remove,
+											string[] to_load_local,
+											string[] to_load_remote,
+											string[] to_install_as_dep,
+											string[] ignorepkgs,
+											string[] overwrite_files) throws Error;
 		public abstract void trans_cancel () throws Error;
 		[DBus (no_reply = true)]
 		public abstract void quit () throws Error;
