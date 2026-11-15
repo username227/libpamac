@@ -32,6 +32,9 @@ namespace Pamac {
 		public bool no_update_hide_icon { get { return config.no_update_hide_icon; } }
 
 		public signal void updates_available (uint16 updates_nb);
+		// A partial check must not clear last-known updates.
+		// 'deferred' means an active Pamac build prevented VCS inspection.
+		public signal void updates_incomplete (bool deferred);
 
 		public UpdatesChecker () {
 			Object ();
@@ -54,28 +57,28 @@ namespace Pamac {
 			lock_monitor.changed.disconnect (on_lock_changed);
 			config.reload ();
 			if (config.refresh_period != 0) {
-				// get updates
-				string[] cmds = {"pamac-checkupdates"};
+				// pamac-checkupdates: 0 = checked and clear, 100 = checked
+				// with updates, 101 = VCS deferred, 102 = VCS check failed.
+				int exit_status = -1;
+				uint16 found_nb = 0;
+				string[] found_list = {};
 				message ("check updates");
 				try {
-					var process = new Subprocess.newv (cmds, SubprocessFlags.STDOUT_PIPE);
+					var process = new Subprocess.newv ({"pamac-checkupdates"}, SubprocessFlags.STDOUT_PIPE);
 					process.wait_async.begin (null, () => {
-						_updates_nb = 0;
-						_updates_list = {};
 						if (process.get_if_exited ()) {
-							int status = process.get_exit_status ();
-							// status 100 means updates are available
-							if (status == 100) {
+							exit_status = process.get_exit_status ();
+							if (exit_status == 100 || exit_status == 101 || exit_status == 102) {
 								var dis = new DataInputStream (process.get_stdout_pipe ());
-								// count lines
 								try {
-									string line;
+									string? line;
 									while ((line = dis.read_line ()) != null) {
-										_updates_nb++;
-										_updates_list += line;
+										found_nb++;
+										found_list += line;
 									}
 								} catch (Error e) {
 									warning (e.message);
+									exit_status = -1;
 								}
 							}
 						}
@@ -85,7 +88,28 @@ namespace Pamac {
 				} catch (Error e) {
 					warning (e.message);
 				}
-				updates_available (_updates_nb);
+				if (exit_status == 0) {
+					// A *complete* check is the only proof of no updates.
+					_updates_nb = 0;
+					_updates_list = {};
+					updates_available (0);
+				} else if (exit_status == 100 && found_nb > 0) {
+					_updates_nb = found_nb;
+					_updates_list = found_list;
+					updates_available (_updates_nb);
+				} else if (exit_status == 101 || exit_status == 102) {
+					// A partial result provides a lower bound, never a reason
+					// to erase an existing confirmed update indication.
+					if (found_nb > _updates_nb) {
+						_updates_nb = found_nb;
+						_updates_list = found_list;
+						updates_available (_updates_nb);
+					}
+					updates_incomplete (exit_status == 101);
+				} else {
+					// A failed process is also not proof of being up to date.
+					updates_incomplete (false);
+				}
 			}
 			lock_monitor.changed.connect (on_lock_changed);
 		}
