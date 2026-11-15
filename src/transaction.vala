@@ -358,6 +358,11 @@ namespace Pamac {
 				return;
 			}
 			unowned string real_aur_build_dir = database.get_real_aur_build_dir ();
+			var aur_lock = new AurBuildLock (real_aur_build_dir);
+			if (!(yield aur_lock.acquire_async ())) {
+				emit_error ("Could not lock AUR build files", new GenericArray<string> ());
+				return;
+			}
 			try {
 				yield transaction_interface.clean_build_files (real_aur_build_dir);
 			} catch (Error e) {
@@ -365,6 +370,7 @@ namespace Pamac {
 				details.add ("clean_build_files: %s".printf (e.message));
 				emit_error ("Daemon Error", details);
 			}
+			aur_lock.release ();
 		}
 
 		public async bool set_pkgreason_async (string pkgname, uint reason) {
@@ -1093,6 +1099,30 @@ namespace Pamac {
 				to_load_local.length > 0 ||
 				to_load_remote.length > 0 ||
 				to_build.length > 0) {
+				AurBuildLock? aur_lock = null;
+				if (config.support_aur) {
+					// Acquire BEFORE any source refresh, dependency calculation,
+					// cloned build file, or makepkg invocation. Hold until the
+					// entire transaction, including package installation, ends.
+					aur_lock = new AurBuildLock (database.get_real_aur_build_dir ());
+					build_cancellable.reset ();
+					int lock_status = aur_lock.try_acquire ();
+					if (lock_status == 0) {
+						emit_action ("Waiting for another Pamac operation to finish...");
+						waiting = true;
+						start_waiting ();
+						bool acquired = yield aur_lock.acquire_async (build_cancellable);
+						waiting = false;
+						stop_waiting ();
+						if (!acquired) {
+							emit_error ("Could not acquire AUR build lock", new GenericArray<string> ());
+							return false;
+						}
+					} else if (lock_status < 0) {
+						emit_error ("Could not acquire AUR build lock", new GenericArray<string> ());
+						return false;
+					}
+				}
 				success = yield run_alpm_transaction ();
 				if (!dry_run && success) {
 					if (to_build_queue.get_length () != 0) {
@@ -1139,6 +1169,10 @@ namespace Pamac {
 				ignorepkgs.remove_all ();
 				overwrite_files.remove_all ();
 				to_install_as_dep.remove_all ();
+				// The lock remains held through the last build and installation.
+				if (aur_lock != null) {
+					aur_lock.release ();
+				}
 			} else {
 				if (snap_to_install.length > 0) {
 					emit_action (dgettext (null, "Preparing") + "...");
@@ -2215,6 +2249,7 @@ namespace Pamac {
 				build_cancellable.cancel ();
 			} else if (waiting) {
 				waiting = false;
+				build_cancellable.cancel ();
 			} else {
 				try {
 					transaction_interface.trans_cancel ();
