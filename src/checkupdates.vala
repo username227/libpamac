@@ -17,7 +17,41 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+	// This lightweight entry point is used by the tray as well as scripts.
+	// Prefer the shared session coordinator; keep the original direct path
+	// for headless, root, and non-D-Bus environments.
 	public int checkupdates () {
+		try {
+			Pamac.UpdateCoordinator coordinator = Bus.get_proxy_sync (
+				BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
+				"/org/manjaro/pamac/UpdateCoordinator1");
+			int status = -1;
+			string[] results = {};
+			bool received = false;
+			var loop = new MainLoop ();
+			coordinator.check.begin ("default", false, (obj, res) => {
+				try {
+					coordinator.check.end (res, out status, out results);
+					received = true;
+				} catch (Error e) {
+					warning ("Coordinator check failed: %s", e.message);
+				}
+				loop.quit ();
+			});
+			loop.run ();
+			if (received) {
+				foreach (unowned string line in results) {
+					stdout.printf ("%s\\n", line);
+				}
+				return status;
+			}
+		} catch (Error e) {
+			warning ("Update coordinator unavailable: %s", e.message);
+		}
+		return checkupdates_direct ();
+	}
+
+	public int checkupdates_direct () {
 		var config = new Pamac.Config ("/etc/pamac.conf");
 		config.enable_appstream = false;
 		config.enable_snap = false;
