@@ -1,8 +1,8 @@
 namespace Pamac {
-    [CCode (cname = "pamac_aur_build_lock_try", cheader_filename = "aur_build_lock.h")]
+    [CCode (cname = "pamac_aur_lock_fd_try", cheader_filename = "aur_build_lock.h")]
     internal extern int aur_build_lock_try (string path);
 
-    [CCode (cname = "pamac_aur_build_lock_release", cheader_filename = "aur_build_lock.h")]
+    [CCode (cname = "pamac_aur_lock_fd_release", cheader_filename = "aur_build_lock.h")]
     internal extern void aur_build_lock_release (int fd);
 
     // One advisory lock per build directory, shared by all Pamac processes.
