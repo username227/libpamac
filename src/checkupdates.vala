@@ -20,13 +20,17 @@
 	// The coordinator responds immediately; completion is delivered via
 	// CheckFinished. A second request joins the same child process.
 	// Only absence of the service permits a standalone fallback.
-	public int checkupdates () {
+	public int checkupdates (bool join_only = false) {
 		Pamac.UpdateCoordinator coordinator;
 		try {
 			coordinator = Bus.get_proxy_sync (
 				BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
 				"/org/manjaro/pamac/UpdateCoordinator1");
 		} catch (Error e) {
+			if (join_only) {
+				// This mode may never trigger a DB refresh or start VCS.
+				return 104;
+			}
 			warning ("Update coordinator unavailable: %s", e.message);
 			return checkupdates_direct ();
 		}
@@ -74,8 +78,19 @@
 		int result = 103;
 		string[] results = {};
 		try {
-			coordinator.request_check ("default", false,
-				out running, out expected_id, out result, out results);
+			if (join_only) {
+				bool available;
+				coordinator.try_join ("default",
+					out available, out running, out expected_id, out result, out results);
+				if (!available) {
+					// Explicit no-result sentinel: caller may run its own
+					// original read-only check, without any coordinator work.
+					return 104;
+				}
+			} else {
+				coordinator.request_check ("default", false,
+					out running, out expected_id, out result, out results);
+			}
 		} catch (Error e) {
 			// The service may have accepted another request already.
 			// Never launch a second VCS source scan on D-Bus failure.
@@ -206,8 +221,12 @@
 			// Internal coordinator worker; never recurse into the service.
 			return checkupdates_direct ();
 		}
+		if (args.length == 2 && args[1] == "--join-only") {
+			// Returns 104 without starting a worker if no result is reusable.
+			return checkupdates (true);
+		}
 		if (args.length != 1) {
-			stderr.printf ("Usage: pamac-checkupdates [--direct]\n");
+			stderr.printf ("Usage: pamac-checkupdates [--direct|--join-only]\n");
 			return 2;
 		}
 		return checkupdates ();
