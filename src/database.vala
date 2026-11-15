@@ -41,6 +41,8 @@ namespace Pamac {
 		internal bool dbs_missing { get; private set; }
 
 		public signal void get_updates_progress (uint percent);
+		// Progress stages are emitted on the main context for CLI consumers.
+		public signal void vcs_refresh_progress (string pkgname, uint current, uint total, string stage);
 		public signal void emit_warning (string message);
 
 		public Database (Config config) {
@@ -2123,7 +2125,7 @@ namespace Pamac {
 				}
 				if (config.check_aur_updates) {
 					if (config.check_aur_vcs_updates) {
-						refresh_vcs_sources (vcs_local_pkgs);
+						refresh_vcs_sources (vcs_local_pkgs, false);
 					}
 					// count this step as 5% of the total
 					context.invoke (() => {
@@ -2165,33 +2167,119 @@ namespace Pamac {
 			return updates;
 		}
 
-		void refresh_vcs_sources (GenericArray<string> vcs_local_pkgs) {
+
+		// Emit progress from the worker thread without writing to the CLI from it.
+		void report_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
+			string package_copy = pkgname;
+			context.invoke (() => {
+				vcs_refresh_progress (package_copy, current, total, stage);
+				return false;
+			});
+		}
+
+		// Complete all development-source checks before the CLI calculates upgrades.
+		// This runs in a worker; normal GUI update checks continue to use the same
+		// refresh implementation without emitting the extra CLI progress events.
+		public async bool refresh_vcs_sources_for_upgrade_async () {
+			if (!config.support_aur || !config.check_aur_updates || !config.check_aur_vcs_updates) {
+				return true;
+			}
+			bool success = false;
+			try {
+				new Thread<int>.try ("refresh_vcs_for_upgrade", () => {
+					lock (alpm_config) {
+						var vcs_local_pkgs = new GenericArray<string> ();
+						unowned Alpm.List<unowned Alpm.Package> pkgcache = alpm_handle.localdb.pkgcache;
+						while (pkgcache != null) {
+							unowned Alpm.Package installed_pkg = pkgcache.data;
+							unowned string name = installed_pkg.name;
+							if (installed_pkg.get_new_version (alpm_handle.syncdbs) == null
+									&& get_syncpkg (alpm_handle, name) == null
+									&& alpm_handle.should_ignore (installed_pkg) == 0
+									&& (name.has_suffix ("-git")
+										|| name.has_suffix ("-svn")
+										|| name.has_suffix ("-bzr")
+										|| name.has_suffix ("-hg"))) {
+								vcs_local_pkgs.add (name);
+							}
+							pkgcache.next ();
+						}
+						success = refresh_vcs_sources (vcs_local_pkgs, true);
+					}
+					context.invoke (refresh_vcs_sources_for_upgrade_async.callback);
+					return 0;
+				});
+				yield;
+			} catch (Error e) {
+				warning ("VCS refresh failed: %s", e.message);
+				return false;
+			}
+			return success;
+		}
+
+		bool refresh_vcs_sources (GenericArray<string> vcs_local_pkgs, bool report_progress) {
+			bool success = true;
+			uint total = vcs_local_pkgs.length;
+			uint current = 0;
+			if (report_progress && total == 0) {
+				report_vcs_refresh_progress ("", 0, 0, "empty");
+			}
 			foreach (unowned string pkgname in vcs_local_pkgs) {
-				// get last build files
+				current++;
+				if (report_progress) {
+					report_vcs_refresh_progress (pkgname, current, total, "start");
+				}
+				// Get the latest AUR build instructions, then refresh VCS sources.
 				AURInfos? aur_infos = aur_plugin.get_infos (pkgname);
 				if (aur_infos == null) {
-					// error
+					// Locally installed VCS packages do not necessarily exist in AUR.
+					if (report_progress) {
+						report_vcs_refresh_progress (pkgname, current, total, "missing");
+					}
 					continue;
 				}
 				File? clone_dir = clone_build_files (aur_infos.packagebase, false, null);
-				if (clone_dir != null) {
-					// get last sources
-					// no output to not pollute checkupdates output
-					var launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
-					string cwd = clone_dir.get_path ();
-					launcher.set_cwd (cwd);
-					GenericArray<string> cmdline = get_dynamic_user_cmdline (cwd);
-					cmdline.add ("makepkg");
-					cmdline.add ("--nobuild");
-					cmdline.add ("--noprepare");
-					cmdline.add ("--nodeps");
-					cmdline.add ("--skipinteg");
-					int status = launch_subprocess (launcher, cmdline);
-					if (status == 0) {
-						regenerate_srcinfo (clone_dir.get_basename (), null);
+				if (clone_dir == null) {
+					success = false;
+					if (report_progress) {
+						report_vcs_refresh_progress (pkgname, current, total, "clone-failed");
 					}
+					continue;
+				}
+				if (report_progress) {
+					report_vcs_refresh_progress (pkgname, current, total, "source");
+				}
+				// Avoid verbose child output; report the package and phase instead.
+				var launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
+				string cwd = clone_dir.get_path ();
+				launcher.set_cwd (cwd);
+				GenericArray<string> cmdline = get_dynamic_user_cmdline (cwd);
+				cmdline.add ("makepkg");
+				cmdline.add ("--nobuild");
+				cmdline.add ("--noprepare");
+				cmdline.add ("--nodeps");
+				cmdline.add ("--skipinteg");
+				int status = launch_subprocess (launcher, cmdline);
+				if (status != 0) {
+					success = false;
+					if (report_progress) {
+						report_vcs_refresh_progress (pkgname, current, total, "source-failed");
+					}
+					continue;
+				}
+				if (report_progress) {
+					report_vcs_refresh_progress (pkgname, current, total, "metadata");
+				}
+				if (!regenerate_srcinfo (clone_dir.get_basename (), null)) {
+					success = false;
+					if (report_progress) {
+						report_vcs_refresh_progress (pkgname, current, total, "metadata-failed");
+					}
+				} else if (report_progress) {
+					report_vcs_refresh_progress (pkgname, current, total, "done");
 				}
 			}
+			return success;
 		}
 
 		HashTable<string, string> get_vcs_last_version (GenericArray<string> vcs_local_pkgs) {
