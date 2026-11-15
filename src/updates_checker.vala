@@ -64,6 +64,12 @@ namespace Pamac {
 						apply_shared_result (status, lines);
 					}
 				});
+				coordinator.check_stalled.connect ((profile, check_id) => {
+					if (profile == "default") {
+						// The worker remains alive: never clear a known update.
+						updates_incomplete (false);
+					}
+				});
 			} catch (Error e) {
 				// Older/non-session installs still use pamac-checkupdates.
 				message ("Shared update coordinator not available: %s", e.message);
