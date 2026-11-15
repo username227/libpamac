@@ -2277,6 +2277,9 @@ namespace Pamac {
 				"  git clone -q --depth=1 -- \"$url\" \"$pkgdir\"\n" +
 				"fi\n" +
 				"cd \"$pkgdir\"\n" +
+				"export SRCDEST=\"$pkgdir/.vcs-src\"\n" +
+				"export BUILDDIR=\"$pkgdir/.vcs-build\"\n" +
+				"mkdir -p \"$SRCDEST\" \"$BUILDDIR\"\n" +
 				"makepkg --nobuild --noprepare --nodeps --skipinteg >/dev/null 2>&1\n" +
 				"printf '@@PAMAC_VCS_METADATA@@\\n'\n" +
 				"makepkg --printsrcinfo\n";
