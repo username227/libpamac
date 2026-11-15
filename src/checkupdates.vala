@@ -21,10 +21,17 @@
 	// Prefer the shared session coordinator; keep the original direct path
 	// for headless, root, and non-D-Bus environments.
 	public int checkupdates () {
+		Pamac.UpdateCoordinator coordinator;
 		try {
-			Pamac.UpdateCoordinator coordinator = Bus.get_proxy_sync (
+			coordinator = Bus.get_proxy_sync (
 				BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
 				"/org/manjaro/pamac/UpdateCoordinator1");
+		} catch (Error e) {
+			// Only fall back if we cannot connect before a check starts.
+			warning ("Update coordinator unavailable: %s", e.message);
+			return checkupdates_direct ();
+		}
+		{
 			int status = -1;
 			string[] results = {};
 			bool received = false;
@@ -45,10 +52,12 @@
 				}
 				return status;
 			}
-		} catch (Error e) {
-			warning ("Update coordinator unavailable: %s", e.message);
+			// The coordinator may still be running after a D-Bus timeout.
+			// Never start an independent scan at that point: it can race
+			// with the shared VCS refresh and defeats single-flight.
+			// Return an explicit incomplete result instead.
+			return 103;
 		}
-		return checkupdates_direct ();
 	}
 
 	public int checkupdates_direct () {
