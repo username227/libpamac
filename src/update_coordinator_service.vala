@@ -40,6 +40,8 @@ namespace Pamac {
 						case FileMonitorEvent.CREATED:
 						case FileMonitorEvent.DELETED:
 						case FileMonitorEvent.MOVED:
+						case FileMonitorEvent.MOVED_IN:
+						case FileMonitorEvent.MOVED_OUT:
 						case FileMonitorEvent.RENAMED:
 							// These indicate installed-package database changes,
 							// not a sync-db refresh performed by our own checker.
@@ -80,7 +82,7 @@ namespace Pamac {
 			}
 			if (pending_epoch != invalidation_epoch &&
 				(status == 0 || status == 100)) {
-				message ("Pamac check result incomplete: installed packages changed during check");
+				message ("Pamac check result incomplete: state invalidated during check");
 				status = 103;
 			}
 			last_status = status;
