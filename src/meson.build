@@ -82,7 +82,7 @@ libpamac = library('pamac',
 			'aur_interface.vala', 'database.vala', 'transaction.vala', 'aur_build_lock.vala', 'aur_build_lock.c', 'alpm_utils.vala',
 			'transaction_interface.vala', 'transaction_interface_root.vala', 'daemon_interface.vala',
 			'transaction_interface_daemon.vala', 'snap_interface.vala', 'flatpak_interface.vala',
-			'appstream_interface.vala', 'updates_checker.vala'],
+			'appstream_interface.vala', 'updates_checker.vala', 'update_coordinator.vala'],
 	dependencies: [alpm_deps, math, libsoup, gmodule],
 	vala_args: common_vala_args,
 	c_args: [common_c_args, alpm_c_args],
@@ -115,6 +115,14 @@ executable('pamac-daemon',
 	install : true)
 
 libpamac_dep = declare_dependency(link_with: libpamac)
+
+# A user-session D-Bus service coordinates ordinary update discovery.
+# It is independent of the root package-transaction daemon.
+executable('pamac-update-coordinator',
+	sources: ['update_coordinator_service.vala'],
+	dependencies: [gio, libpamac_dep],
+	vala_args: common_vala_args,
+	install: true)
 
 executable('pamac-checkupdates',
 	sources: ['checkupdates.vala'],
