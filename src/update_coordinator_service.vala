@@ -12,6 +12,27 @@ namespace Pamac {
 		string[] last_updates = {};
 		int64 completed_at = 0;
 		uint invalidation_epoch = 0;
+		FileMonitor? db_lock_monitor;
+		bool own_db_refresh = false;
+
+		construct {
+			// External pacman transactions invalidate a cached check as soon
+			// as their database lock disappears. Do not treat our own database
+			// refresh as an external package change.
+			var config = new Config ("/etc/pamac.conf");
+			var db_lock = File.new_for_path (Path.build_filename (config.db_path, "db.lck"));
+			try {
+				db_lock_monitor = db_lock.monitor_file (FileMonitorFlags.NONE);
+				db_lock_monitor.changed.connect ((src, dst, event_type) => {
+					if (event_type == FileMonitorEvent.DELETED && !own_db_refresh) {
+						invalidation_epoch++;
+						completed_at = 0;
+					}
+				});
+			} catch (Error e) {
+				warning ("Could not monitor pacman database lock: %s", e.message);
+			}
+		}
 
 		public void invalidate () throws IOError {
 			invalidation_epoch++;
@@ -70,7 +91,9 @@ namespace Pamac {
 
 			var transaction = new Transaction (database);
 			if (database.need_refresh ()) {
+				own_db_refresh = true;
 				yield transaction.refresh_dbs_async ();
+				own_db_refresh = false;
 			}
 
 			var available = yield database.get_updates_async ();
