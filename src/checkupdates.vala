@@ -54,6 +54,22 @@
 			}
 		});
 
+
+		coordinator.check_stalled.connect ((profile, id) => {
+			if (profile != "default") {
+				return;
+			}
+			observed_id = id;
+			observed_status = 103;
+			observed_lines = {};
+			if (expected_id != 0 && id == expected_id) {
+				done = true;
+				if (loop.is_running ()) {
+					loop.quit ();
+				}
+			}
+		});
+
 		bool running = false;
 		int result = 103;
 		string[] results = {};
