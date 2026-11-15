@@ -2472,6 +2472,7 @@ namespace Pamac {
 				});
 				yield;
 			} catch (Error e) {
+				last_vcs_refresh_success = false;
 				warning (e.message);
 			}
 			return updates;
