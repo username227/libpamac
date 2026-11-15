@@ -165,4 +165,4 @@ integrated build/SONAME fixes; do not merge integration yet.
 - Automatic GUI retry when an AUR build releases its flock.
 - Production deployment and upstream PR preparation.
 
-**The currently installed integration branch remains untouched.**
+**All integration branches remain unchanged.**
