@@ -1,30 +1,37 @@
 /*
- * Pamac-Fix per-user update coordinator (initial default-profile backend).
+ * Pamac-Fix single-flight update coordinator.
  *
- * One session D-Bus owner executes the actual update query; simultaneous
- * requests join it. This is deliberately separate from the transaction-wide
- * AUR flock, which still protects all build-directory mutations.
+ * The original pamac-checkupdates direct path remains the only update
+ * discovery worker. The coordinator owns exactly one subprocess, coalesces
+ * matching requests and broadcasts its result. Unlike the earlier prototype,
+ * no Database or Transaction objects run in the session D-Bus service.
+ *
+ * A synchronous D-Bus RequestCheck only starts/joins a job. It NEVER waits
+ * for VCS discovery; CheckFinished delivers results asynchronously.
  */
 namespace Pamac {
 	public class UpdateCoordinatorService : Object, UpdateCoordinator {
 		bool checking = false;
-		int last_status = -1;
+		uint64 generation = 0;
+		uint invalidation_epoch = 0;
+		uint pending_epoch = 0;
+		uint watchdog_source = 0;
+		int last_status = 103;
 		string[] last_updates = {};
 		int64 completed_at = 0;
-		uint invalidation_epoch = 0;
+		Subprocess? worker;
 		FileMonitor? db_lock_monitor;
-		bool own_db_refresh = false;
 
 		construct {
-			// External pacman transactions invalidate a cached check as soon
-			// as their database lock disappears. Do not treat our own database
-			// refresh as an external package change.
 			var config = new Config ("/etc/pamac.conf");
 			var db_lock = File.new_for_path (Path.build_filename (config.db_path, "db.lck"));
 			try {
 				db_lock_monitor = db_lock.monitor_file (FileMonitorFlags.NONE);
 				db_lock_monitor.changed.connect ((src, dst, event_type) => {
-					if (event_type == FileMonitorEvent.DELETED && !own_db_refresh) {
+					if (event_type == FileMonitorEvent.DELETED) {
+						// Conservatively mark a check incomplete if the package
+						// database changes while it is running. In particular,
+						// do not infer "no updates" from a potentially stale scan.
 						invalidation_epoch++;
 						completed_at = 0;
 					}
@@ -42,121 +49,129 @@ namespace Pamac {
 			return copy;
 		}
 
-		public void invalidate () throws IOError {
+		public void invalidate () throws DBusError, IOError {
 			invalidation_epoch++;
 			completed_at = 0;
 		}
 
-		public async void check (string profile, bool force,
-			out int exit_status, out string[] updates) throws IOError {
-			if (profile != "default") {
-				throw new IOError.NOT_SUPPORTED (
-					"Only the default Pamac update profile is supported");
-			}
-
-			// Callers joining an active check receive precisely its results.
-			// Do not contend for the AUR flock or start another source refresh.
-			if (checking) {
-				while (checking) {
-					Timeout.add (100, () => {
-						check.callback ();
-						return false;
-					});
-					yield;
-				}
-				exit_status = last_status;
-				updates = copy_lines (last_updates);
+		private void finish_check (uint64 id, int status, string[] lines) {
+			if (!checking || id != generation) {
+				// A late callback from a worker already failed or was stopped.
 				return;
 			}
+			if (watchdog_source != 0) {
+				Source.remove (watchdog_source);
+				watchdog_source = 0;
+			}
+			if (pending_epoch != invalidation_epoch &&
+				(status == 0 || status == 100)) {
+				status = 103;
+			}
+			last_status = status;
+			last_updates = copy_lines (lines);
+			completed_at = (status == 0 || status == 100) ?
+				GLib.get_monotonic_time () : 0;
+			worker = null;
+			checking = false;
+			message ("Pamac shared update check %" + uint64.FORMAT +
+				" finished: status %d, %u result lines", id, status, lines.length);
+			check_finished ("default", id, status, copy_lines (lines));
+		}
 
-			// A short-lived complete result avoids serial duplicate 48-second
-			// checks from the GUI, CLI and tray. A manual forced check or an
-			// invalidation always bypasses this cache.
+		public void request_check (string profile, bool force,
+			out bool running, out uint64 check_id, out int status,
+			out string[] updates) throws DBusError, IOError {
+			if (profile != "default") {
+				throw new IOError.NOT_SUPPORTED ("Only the default Pamac profile is supported");
+			}
+			check_id = generation;
+			status = last_status;
+			updates = copy_lines (last_updates);
+			if (checking) {
+				// Another client joins the existing worker without taking flock.
+				running = true;
+				return;
+			}
 			if (!force && completed_at != 0 &&
 				(last_status == 0 || last_status == 100) &&
 				GLib.get_monotonic_time () - completed_at < 30 * TimeSpan.SECOND) {
-				exit_status = last_status;
-				updates = copy_lines (last_updates);
+				running = false;
 				return;
 			}
 
+			generation++;
+			check_id = generation;
 			checking = true;
-			uint start_epoch = invalidation_epoch;
-			check_started (profile);
-			int result = -1;
-			string[] found = {};
+			pending_epoch = invalidation_epoch;
+			running = true;
+			status = 103;
+			updates = {};
+			check_started ("default", check_id);
+			message ("Pamac shared update check started");
 
-			// Match pamac-checkupdates' default scope. Per-user overrides and
-			// explicit CLI flags require separate, fully keyed profiles before
-			// clients with differing settings may share this service.
-			var config = new Config ("/etc/pamac.conf");
-			config.enable_appstream = false;
-			config.enable_snap = false;
-			var database = new Database (config);
-			database.vcs_refresh_progress.connect ((package_name, current, total, phase) => {
-				check_progress (profile, package_name, current, total, phase);
-			});
+			try {
+				// --direct bypasses the D-Bus client bridge. This is the tested
+				// pre-coordinator checker, including its original flock rules.
+				var proc = new Subprocess.newv (
+					{"/usr/bin/pamac-checkupdates", "--direct"},
+					SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
+				worker = proc;
+				uint64 id = check_id;
 
-			var transaction = new Transaction (database);
-			if (database.need_refresh ()) {
-				own_db_refresh = true;
-				yield transaction.refresh_dbs_async ();
-				own_db_refresh = false;
-			}
+				// Fail closed if a worker stops responding entirely. This is
+				// a safety watchdog, not a D-Bus timeout extension. A failure
+				// never launches another VCS refresh or clears tray state.
+				watchdog_source = Timeout.add_seconds (120, () => {
+					watchdog_source = 0;
+					if (checking && id == generation) {
+						warning ("Pamac shared check worker did not finish; terminating it");
+						proc.force_exit ();
+						finish_check (id, 103, {});
+					}
+					return false;
+				});
 
-			var available = yield database.get_updates_async ();
-			foreach (unowned AlpmPackage pkg in available.repos_updates) {
-				if (pkg.installed_version != null) {
-					found += "%s  %s -> %s".printf (pkg.name, pkg.installed_version, pkg.version);
-				} else {
-					found += "%s  %s".printf (pkg.name, pkg.version);
-				}
+				proc.communicate_utf8_async.begin (null, null, (obj, res) => {
+					int finished_status = 103;
+					string[] finished_lines = {};
+					try {
+						string? output;
+						string? diagnostics;
+						proc.communicate_utf8_async.end (res, out output, out diagnostics);
+						if (proc.get_if_exited ()) {
+							int exit_code = proc.get_exit_status ();
+							if (exit_code == 0 || exit_code == 100 ||
+								exit_code == 101 || exit_code == 102) {
+								finished_status = exit_code;
+							}
+						}
+						if (output != null) {
+							foreach (unowned string line in output.split ("\n")) {
+								if (line.length != 0) {
+									finished_lines += line;
+								}
+							}
+						}
+						if (diagnostics != null && diagnostics.strip () != "") {
+							message ("Pamac check diagnostics: %s", diagnostics.strip ());
+						}
+						// A successful nonempty update check must return at
+						// least one package line, and clear must return none.
+						if ((finished_status == 100 && finished_lines.length == 0) ||
+							(finished_status == 0 && finished_lines.length != 0)) {
+							finished_status = 103;
+						}
+					} catch (Error e) {
+						warning ("Pamac direct check failed: %s", e.message);
+					}
+					finish_check (id, finished_status, finished_lines);
+				});
+			} catch (Error e) {
+				warning ("Could not start Pamac check worker: %s", e.message);
+				finish_check (check_id, 103, {});
+				running = false;
+				status = 103;
 			}
-			foreach (unowned AURPackage pkg in available.aur_updates) {
-				found += "%s  %s -> %s".printf (pkg.name, pkg.installed_version, pkg.version);
-			}
-			foreach (unowned FlatpakPackage pkg in available.flatpak_updates) {
-				unowned string? app_name = pkg.app_name;
-				if (app_name == null) {
-					found += "%s  %s".printf (pkg.name, pkg.version);
-				} else {
-					found += "%s  %s".printf (app_name, pkg.version);
-				}
-			}
-
-			// Preserve pamac-checkupdates' existing optional behavior:
-			// refresh the files databases and pre-download packages only
-			// when an update check has completed successfully.
-			if (!database.vcs_updates_deferred &&
-				database.last_vcs_refresh_success && found.length > 0) {
-				own_db_refresh = true;
-				yield transaction.refresh_files_dbs_async ();
-				if (config.download_updates) {
-					yield transaction.download_updates_async ();
-				}
-				own_db_refresh = false;
-			}
-
-			if (database.vcs_updates_deferred) {
-				result = 101;
-			} else if (!database.last_vcs_refresh_success) {
-				result = 102;
-			} else {
-				result = found.length == 0 ? 0 : 100;
-			}
-			// An installation can invalidate an in-flight check. Do not
-			// publish its possibly stale result as complete.
-			if (start_epoch != invalidation_epoch && (result == 0 || result == 100)) {
-				result = 103;
-			}
-			last_status = result;
-			last_updates = copy_lines (found);
-			completed_at = (result == 0 || result == 100) ?
-				GLib.get_monotonic_time () : 0;
-			checking = false;
-			check_finished (profile, result, found);
-			exit_status = result;
-			updates = found;
 		}
 	}
 }
@@ -169,7 +184,8 @@ int main (string[] args) {
 		BusNameOwnerFlags.NONE,
 		(conn) => {
 			try {
-				conn.register_object<Pamac.UpdateCoordinator> ("/org/manjaro/pamac/UpdateCoordinator1", coordinator);
+				conn.register_object<Pamac.UpdateCoordinator> (
+					"/org/manjaro/pamac/UpdateCoordinator1", coordinator);
 			} catch (IOError e) {
 				warning ("Could not register Pamac update coordinator: %s", e.message);
 				loop.quit ();
