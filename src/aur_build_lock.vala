@@ -20,6 +20,12 @@ namespace Pamac {
             if (fd >= 0) {
                 return 1;
             }
+            // The configured build directory may not exist yet. The lock is
+            // alongside it, so make sure its parent exists before opening it.
+            if (DirUtils.create_with_parents (Path.get_dirname (lock_path), 0700) != 0) {
+                warning ("Cannot create directory for Pamac AUR lock: %s", lock_path);
+                return -1;
+            }
             int result = aur_build_lock_try (lock_path);
             if (result >= 0) {
                 fd = result;
