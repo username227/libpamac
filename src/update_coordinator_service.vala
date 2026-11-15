@@ -21,24 +21,38 @@ namespace Pamac {
 		string[] last_updates = {};
 		int64 completed_at = 0;
 		Subprocess? worker;
-		FileMonitor? db_lock_monitor;
+		FileMonitor? local_db_monitor;
 
 		construct {
+			// A repository refresh by pamac-checkupdates --direct can briefly
+			// create/delete db.lck. Watching that lock wrongly invalidated
+			// the worker's own successful check (100 -> 103). Instead watch
+			// installed-package database entries: transactions create, remove
+			// or rename entries in <DBPath>/local, while -Sy does not.
+			// Other clients can also call Invalidate explicitly. The completed
+			// result cache is deliberately limited to 30 seconds.
 			var config = new Config ("/etc/pamac.conf");
-			var db_lock = File.new_for_path (Path.build_filename (config.db_path, "db.lck"));
+			var local_db = File.new_for_path (Path.build_filename (config.db_path, "local"));
 			try {
-				db_lock_monitor = db_lock.monitor_file (FileMonitorFlags.NONE);
-				db_lock_monitor.changed.connect ((src, dst, event_type) => {
-					if (event_type == FileMonitorEvent.DELETED) {
-						// Conservatively mark a check incomplete if the package
-						// database changes while it is running. In particular,
-						// do not infer "no updates" from a potentially stale scan.
-						invalidation_epoch++;
-						completed_at = 0;
+				local_db_monitor = local_db.monitor_directory (FileMonitorFlags.WATCH_MOVES);
+				local_db_monitor.changed.connect ((src, dst, event_type) => {
+					switch (event_type) {
+						case FileMonitorEvent.CREATED:
+						case FileMonitorEvent.DELETED:
+						case FileMonitorEvent.MOVED:
+						case FileMonitorEvent.RENAMED:
+							// These indicate installed-package database changes,
+							// not a sync-db refresh performed by our own checker.
+							invalidation_epoch++;
+							completed_at = 0;
+							message ("Pamac update result invalidated: installed package database changed");
+							break;
+						default:
+							break;
 					}
 				});
 			} catch (Error e) {
-				warning ("Could not monitor pacman database lock: %s", e.message);
+				warning ("Could not monitor installed-package database: %s", e.message);
 			}
 		}
 
@@ -66,6 +80,7 @@ namespace Pamac {
 			}
 			if (pending_epoch != invalidation_epoch &&
 				(status == 0 || status == 100)) {
+				message ("Pamac check result incomplete: installed packages changed during check");
 				status = 103;
 			}
 			last_status = status;
