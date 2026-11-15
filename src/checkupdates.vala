@@ -20,7 +20,7 @@
 	// The coordinator responds immediately; completion is delivered via
 	// CheckFinished. A second request joins the same child process.
 	// Only absence of the service permits a standalone fallback.
-	public int checkupdates (bool join_only = false) {
+	public int checkupdates (bool join_only = false, bool repo_aur_only = false) {
 		Pamac.UpdateCoordinator coordinator;
 		try {
 			coordinator = Bus.get_proxy_sync (
@@ -41,8 +41,9 @@
 		int observed_status = 103;
 		string[] observed_lines = {};
 		uint64 expected_id = 0;
+		string requested_profile = repo_aur_only ? "repo-aur" : "default";
 		coordinator.check_finished.connect ((profile, id, status, lines) => {
-			if (profile != "default") {
+			if (profile != requested_profile) {
 				return;
 			}
 			// Also capture an extremely fast response emitted while our
@@ -60,7 +61,7 @@
 
 
 		coordinator.check_stalled.connect ((profile, id) => {
-			if (profile != "default") {
+			if (profile != requested_profile) {
 				return;
 			}
 			observed_id = id;
@@ -80,7 +81,7 @@
 		try {
 			if (join_only) {
 				bool available;
-				coordinator.try_join ("default",
+				coordinator.try_join (requested_profile,
 					out available, out running, out expected_id, out result, out results);
 				if (!available) {
 					// Explicit no-result sentinel: caller may run its own
@@ -154,7 +155,7 @@
 		return result;
 	}
 
-	public int checkupdates_direct () {
+	public int checkupdates_direct (bool categorized = false) {
 		var config = new Pamac.Config ("/etc/pamac.conf");
 		config.enable_appstream = false;
 		config.enable_snap = false;
@@ -192,6 +193,9 @@
 				}
 			}
 			foreach (unowned Pamac.AlpmPackage pkg in updates.repos_updates) {
+				if (categorized) {
+					stdout.printf ("R\\t");
+				}
 				if (pkg.installed_version != null) {
 					stdout.printf ("%s  %s -> %s\n", pkg.name, pkg.installed_version, pkg.version);
 				} else {
@@ -200,9 +204,15 @@
 				}
 			}
 			foreach (unowned Pamac.AURPackage pkg in updates.aur_updates) {
+				if (categorized) {
+					stdout.printf ("A\\t");
+				}
 				stdout.printf ("%s  %s -> %s\n", pkg.name, pkg.installed_version, pkg.version);
 			}
 			foreach (unowned Pamac.FlatpakPackage pkg in updates.flatpak_updates) {
+				if (categorized) {
+					stdout.printf ("F\\t");
+				}
 				unowned string? app_name = pkg.app_name;
 				if (app_name == null) {
 					stdout.printf ("%s  %s\n", pkg.name, pkg.version);
@@ -217,9 +227,17 @@
 	}
 
 	public int main (string[] args) {
+		if (args.length == 3 && args[1] == "--direct" && args[2] == "--categorized") {
+			// Coordinator-only protocol; visible --direct output is unchanged.
+			return checkupdates_direct (true);
+		}
 		if (args.length == 2 && args[1] == "--direct") {
 			// Internal coordinator worker; never recurse into the service.
 			return checkupdates_direct ();
+		}
+		if (args.length == 3 && args[1] == "--join-only" && args[2] == "--repo-aur") {
+			// Join one existing default worker, excluding Flatpak updates.
+			return checkupdates (true, true);
 		}
 		if (args.length == 2 && args[1] == "--join-only") {
 			// Returns 104 without starting a worker if no result is reusable.
