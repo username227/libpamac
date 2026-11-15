@@ -95,7 +95,8 @@ namespace Pamac {
 			config.reload ();
 			if (config.refresh_period != 0) {
 				// pamac-checkupdates: 0 = checked and clear, 100 = checked
-				// with updates, 101 = VCS deferred, 102 = VCS check failed.
+				// with updates, 101 = VCS deferred, 102 = VCS check failed,
+				// 103 = invalidated while checking.
 				int exit_status = -1;
 				uint16 found_nb = 0;
 				string[] found_list = {};
@@ -105,7 +106,7 @@ namespace Pamac {
 					process.wait_async.begin (null, () => {
 						if (process.get_if_exited ()) {
 							exit_status = process.get_exit_status ();
-							if (exit_status == 100 || exit_status == 101 || exit_status == 102) {
+							if (exit_status == 100 || exit_status == 101 || exit_status == 102 || exit_status == 103) {
 								var dis = new DataInputStream (process.get_stdout_pipe ());
 								try {
 									string? line;
@@ -134,7 +135,7 @@ namespace Pamac {
 					_updates_nb = found_nb;
 					_updates_list = found_list;
 					updates_available (_updates_nb);
-				} else if (exit_status == 101 || exit_status == 102) {
+				} else if (exit_status == 101 || exit_status == 102 || exit_status == 103) {
 					// A partial result provides a lower bound, never a reason
 					// to erase an existing confirmed update indication.
 					if (found_nb > _updates_nb) {
