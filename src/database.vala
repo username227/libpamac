@@ -25,7 +25,7 @@ namespace Pamac {
 		HashTable<string, AURPackageLinked> aur_vcs_pkgs;
 		// Versions produced by isolated VCS checks, never by the active build tree.
 		HashTable<string, string> vcs_checked_versions;
-		public bool last_vcs_refresh_success { get; private set; default = true; }
+		public bool last_vcs_refresh_success { get; private set; }
 		HashTable<unowned string, AlpmPackageLinked> pkgs_cache;
 		HashTable<unowned string, AURPackageLinked> aur_pkgs_cache;
 		GenericArray<string> mirrors_countries;
@@ -57,6 +57,7 @@ namespace Pamac {
 			context = MainContext.default ();
 			aur_vcs_pkgs = new HashTable<string, AURPackageLinked> (str_hash, str_equal);
 			vcs_checked_versions = new HashTable<string, string> (str_hash, str_equal);
+			last_vcs_refresh_success = true;
 			pkgs_cache = new HashTable<unowned string, AlpmPackageLinked> (str_hash, str_equal);
 			aur_pkgs_cache = new HashTable<unowned string, AURPackageLinked> (str_hash, str_equal);
 			// get_user_agent defined in utils.vala
@@ -2077,6 +2078,7 @@ namespace Pamac {
 		}
 
 		void get_updates_real (ref Updates updates) {
+			last_vcs_refresh_success = true;
 			// be sure we have the good updates
 			lock (alpm_config) {
 				// count this step as 5% of the total
@@ -2142,7 +2144,9 @@ namespace Pamac {
 						get_updates_progress (95);
 						return false;
 					});
+					if (last_vcs_refresh_success) {
 					get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
+					}
 					context.invoke (() => {
 						get_updates_progress (100);
 						return false;
