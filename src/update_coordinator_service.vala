@@ -169,7 +169,7 @@ int main (string[] args) {
 		BusNameOwnerFlags.NONE,
 		(conn) => {
 			try {
-				conn.register_object ("/org/manjaro/pamac/UpdateCoordinator1", coordinator);
+				conn.register_object<Pamac.UpdateCoordinator> ("/org/manjaro/pamac/UpdateCoordinator1", coordinator);
 			} catch (IOError e) {
 				warning ("Could not register Pamac update coordinator: %s", e.message);
 				loop.quit ();
