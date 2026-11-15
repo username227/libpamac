@@ -20,6 +20,9 @@ namespace Pamac {
 		public signal void check_started (string profile, uint64 check_id);
 		public signal void check_progress (string profile, uint64 check_id,
 			string package_name, uint current, uint total, string phase);
+		// A stalled worker remains owned by the coordinator, never killed
+		// while Git or other children may still be touching AUR sources.
+		public signal void check_stalled (string profile, uint64 check_id);
 		public signal void check_finished (string profile, uint64 check_id,
 			int status, string[] updates);
 	}
