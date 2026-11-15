@@ -2139,7 +2139,7 @@ namespace Pamac {
 						if (lock_status == 1) {
 							// Hold the lock while refreshing AND reading source versions.
 							aur_vcs_pkgs.remove_all ();
-							last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, false);
+							last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, true);
 						} else if (lock_status == 0) {
 							vcs_updates_deferred = true;
 							// Another transaction may be actively building. Defer
