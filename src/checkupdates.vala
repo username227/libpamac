@@ -41,7 +41,7 @@
 			loop.run ();
 			if (received) {
 				foreach (unowned string line in results) {
-					stdout.printf ("%s\\n", line);
+					stdout.printf ("%s\n", line);
 				}
 				return status;
 			}
