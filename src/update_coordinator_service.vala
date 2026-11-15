@@ -19,6 +19,7 @@ namespace Pamac {
 		uint watchdog_source = 0;
 		int last_status = 103;
 		string[] last_updates = {};
+		string[] last_repo_aur_updates = {};
 		int64 completed_at = 0;
 		Subprocess? worker;
 		FileMonitor? local_db_monitor;
@@ -71,7 +72,8 @@ namespace Pamac {
 			completed_at = 0;
 		}
 
-		private void finish_check (uint64 id, int status, string[] lines) {
+		private void finish_check (uint64 id, int status, string[] lines,
+			string[] repo_aur_lines) {
 			if (!checking || id != generation) {
 				// A late callback from a worker already failed or was stopped.
 				return;
@@ -87,6 +89,7 @@ namespace Pamac {
 			}
 			last_status = status;
 			last_updates = copy_lines (lines);
+			last_repo_aur_updates = copy_lines (repo_aur_lines);
 			completed_at = (status == 0 || status == 100) ?
 				GLib.get_monotonic_time () : 0;
 			worker = null;
@@ -95,6 +98,14 @@ namespace Pamac {
 			message ("Pamac shared update check finished: status %d, %u result lines",
 				status, (uint) lines.length);
 			check_finished ("default", id, status, copy_lines (lines));
+			check_finished ("repo-aur", id,
+				repo_aur_status (status, repo_aur_lines), copy_lines (repo_aur_lines));
+		}
+
+		// A complete worker with Flatpak-only updates is a clean result
+		// for an observer that intentionally excludes Flatpak.
+		private int repo_aur_status (int status, string[] repo_aur_lines) {
+			return status == 100 && repo_aur_lines.length == 0 ? 0 : status;
 		}
 
 		// Read-only clients can reuse a running or recently finished job,
@@ -103,12 +114,14 @@ namespace Pamac {
 		public void try_join (string profile,
 			out bool available, out bool running, out uint64 check_id,
 			out int status, out string[] updates) throws DBusError, IOError {
-			if (profile != "default") {
-				throw new IOError.NOT_SUPPORTED ("Only the default Pamac profile is supported");
+			if (profile != "default" && profile != "repo-aur") {
+				throw new IOError.NOT_SUPPORTED ("Unknown Pamac result profile");
 			}
 			check_id = generation;
-			status = last_status;
-			updates = copy_lines (last_updates);
+			status = profile == "repo-aur" ?
+				repo_aur_status (last_status, last_repo_aur_updates) : last_status;
+			updates = copy_lines (profile == "repo-aur" ?
+				last_repo_aur_updates : last_updates);
 			available = false;
 			running = false;
 			if (checking) {
@@ -168,7 +181,7 @@ namespace Pamac {
 				// --direct bypasses the D-Bus client bridge. This is the tested
 				// pre-coordinator checker, including its original flock rules.
 				var proc = new Subprocess.newv (
-					{"/usr/bin/pamac-checkupdates", "--direct"},
+					{"/usr/bin/pamac-checkupdates", "--direct", "--categorized"},
 					SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_PIPE);
 				worker = proc;
 				uint64 id = check_id;
@@ -183,6 +196,7 @@ namespace Pamac {
 						stalled = true;
 						warning ("Pamac shared check worker still running; preserving its AUR lock");
 						check_stalled ("default", id);
+						check_stalled ("repo-aur", id);
 					}
 					return false;
 				});
@@ -190,6 +204,7 @@ namespace Pamac {
 				proc.communicate_utf8_async.begin (null, null, (obj, res) => {
 					int finished_status = 103;
 					string[] finished_lines = {};
+					string[] finished_repo_aur_lines = {};
 					try {
 						string? output;
 						string? diagnostics;
@@ -203,8 +218,28 @@ namespace Pamac {
 						}
 						if (output != null) {
 							foreach (string line in output.split ("\n")) {
-								if (line.length != 0) {
-									finished_lines += line;
+								if (line.length == 0) {
+									continue;
+								}
+								// Internal worker output is classified at the
+								// source. Never infer a category from display
+								// text (replacement-package lines can resemble
+								// Flatpak updates). Invalid protocol data must
+								// not publish a complete result.
+								bool repo_aur = line.has_prefix ("R\t") ||
+									line.has_prefix ("A\t");
+								bool flatpak = line.has_prefix ("F\t");
+								if ((!repo_aur && !flatpak) || line.length <= 2) {
+									warning ("Invalid classified update worker output");
+									finished_status = 103;
+									finished_lines = {};
+									finished_repo_aur_lines = {};
+									break;
+								}
+								string display_line = line.substring (2);
+								finished_lines += display_line;
+								if (repo_aur) {
+									finished_repo_aur_lines += display_line;
 								}
 							}
 						}
@@ -220,11 +255,12 @@ namespace Pamac {
 					} catch (Error e) {
 						warning ("Pamac direct check failed: %s", e.message);
 					}
-					finish_check (id, finished_status, finished_lines);
+					finish_check (id, finished_status, finished_lines,
+					finished_repo_aur_lines);
 				});
 			} catch (Error e) {
 				warning ("Could not start Pamac check worker: %s", e.message);
-				finish_check (check_id, 103, {});
+				finish_check (check_id, 103, {}, {});
 				running = false;
 				status = 103;
 			}
