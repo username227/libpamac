@@ -31,21 +31,28 @@
 			loop.run ();
 		}
 		var updates = database.get_updates ();
+		// Exit 101: update list is incomplete because a VCS check was safely
+		// deferred. Exit 102: source check failed and the list is incomplete.
+		// Neither may be interpreted by the tray as "no updates available".
+		int partial_status = database.vcs_updates_deferred ? 101 :
+			(!database.last_vcs_refresh_success ? 102 : 0);
 		uint updates_nb = updates.repos_updates.length + updates.aur_updates.length + updates.flatpak_updates.length;
 		if (updates_nb == 0) {
-			return 0;
+			return partial_status;
 		} else {
-			// refresh files dbs
-			transaction.refresh_files_dbs_async.begin (() => {
-				loop.quit ();
-			});
-			loop.run ();
-			// download updates
-			if (config.download_updates) {
-				transaction.download_updates_async.begin (() => {
+			// Do not refresh files databases or download packages on a partial
+			// check: a concurrent Pamac build may hold the ALPM transaction lock.
+			if (partial_status == 0) {
+				transaction.refresh_files_dbs_async.begin (() => {
 					loop.quit ();
 				});
 				loop.run ();
+				if (config.download_updates) {
+					transaction.download_updates_async.begin (() => {
+						loop.quit ();
+					});
+					loop.run ();
+				}
 			}
 			foreach (unowned Pamac.AlpmPackage pkg in updates.repos_updates) {
 				if (pkg.installed_version != null) {
@@ -66,8 +73,9 @@
 					stdout.printf ("%s  %s\n", app_name, pkg.version);
 				}
 			}
-			// special status when updates are available
-			return 100;
+			// Only a complete check may replace the previously confirmed
+			// notification state. Partial checks retain their own exit codes.
+			return partial_status != 0 ? partial_status : 100;
 		}
 	}
 
