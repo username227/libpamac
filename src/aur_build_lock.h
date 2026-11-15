@@ -5,7 +5,7 @@
  * Keep the returned descriptor open for the entire protected operation.
  * The lock file must never be unlinked; it lives beside the build directory.
  */
-int pamac_aur_build_lock_try (const char *path);
-void pamac_aur_build_lock_release (int fd);
+int pamac_aur_lock_fd_try (const char *path);
+void pamac_aur_lock_fd_release (int fd);
 
 #endif
