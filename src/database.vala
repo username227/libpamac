@@ -2205,6 +2205,9 @@ namespace Pamac {
 		// result for this exact profile. Keeps typed package/ignored lists
 		// without initiating a second VCS source refresh.
 		public Updates get_updates_after_shared_check () {
+			// A different process may have synchronized repo databases;
+			// refresh the libalpm handles before resolving typed packages.
+			refresh ();
 			var updates = new Updates ();
 			get_updates_real (ref updates, false);
 			return updates;
@@ -2214,6 +2217,7 @@ namespace Pamac {
 			var updates = new Updates ();
 			try {
 				new Thread<int>.try ("get_shared_updates", () => {
+					refresh ();
 					get_updates_real (ref updates, false);
 					context.invoke (get_updates_after_shared_check_async.callback);
 					return 0;
