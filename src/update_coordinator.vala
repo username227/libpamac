@@ -15,6 +15,12 @@ namespace Pamac {
 			out bool running, out uint64 check_id, out int status,
 			out string[] updates) throws DBusError, IOError;
 
+		// Non-starting check for read-only clients. If no worker or valid
+		// cached result exists, available=false; NEVER starts discovery.
+		public abstract void try_join (string profile,
+			out bool available, out bool running, out uint64 check_id,
+			out int status, out string[] updates) throws DBusError, IOError;
+
 		public abstract void invalidate () throws DBusError, IOError;
 
 		public signal void check_started (string profile, uint64 check_id);
