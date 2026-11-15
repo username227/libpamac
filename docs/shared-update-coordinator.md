@@ -24,9 +24,11 @@ until tested.
   returning `running`, `check_id`, `status`, `updates`. **No long
   D-Bus call** and no 10-minute method timeout.
 - One coordinator process starts at most one
-  `/usr/bin/pamac-checkupdates --direct` subprocess for the
-  `default` profile. The CLI direct option invokes the pre-existing,
-  standalone implementation and never calls the coordinator.
+  `/usr/bin/pamac-checkupdates --direct --categorized` subprocess for
+  the `default` profile. The internal worker emits tagged `R`, `A` and
+  `F` lines (repo/AUR/Flatpak), and the coordinator removes those tags
+  before emitting its existing default results to the tray/GTK clients.
+  The public `--direct` option remains unmodified and standalone.
 - Concurrent requests join the current generation. Clients listen to
   `CheckFinished(profile, check_id, status, updates)`.
 - The tray also subscribes to the result. Only a complete check may
@@ -54,14 +56,20 @@ until tested.
   duplicate scan.
 - `TryJoin(default)` is an immediate **non-starting** D-Bus call.
   It returns a running or 30-second-cached result if one exists; otherwise
-  `available=false`. `pamac-checkupdates --join-only` wraps that call,
-  waits for its existing worker if necessary, and returns internal exit
-  status **104** when no result is reusable; it never launches a worker,
-  performs a sync-db refresh or runs makepkg on its own.
+  `available=false`. `TryJoin(repo-aur)` reuses the **same** worker and
+  generation, but returns only the tagged repo/AUR subset. If the worker
+  found only Flatpak updates, the filtered result is complete with exit
+  status 0. The coordinator emits a second `CheckFinished(repo-aur, ...)`
+  signal for joiners without changing the existing `default` signal.
+  `pamac-checkupdates --join-only --repo-aur` wraps the filtered join;
+  `pamac-checkupdates --join-only` retains its normal all-category view.
+  Both return internal exit status **104** when no result is reusable;
+  neither starts a worker, refreshes sync DBs, or runs makepkg.
 - Read-only clients (`pamac checkupdates` and the GTK update view when
   not explicitly refreshing databases) call `--join-only` for a compatible
-  default scope. With result 104, they use their original native typed
-  discovery path. Thus those commands **do not initiate** the background
+  default scope. The full CLI requests `--join-only --repo-aur` because it
+  intentionally excludes Flatpak; GTK retains the all-category view.
+  With result 104, they use their original native typed discovery path. Thus those commands **do not initiate** the background
   checker's automatic sync/files DB refreshes or downloads. They still
   benefit from checks already triggered by the tray or another client.
   Concurrent native read-only scans without a preexisting shared worker
@@ -81,13 +89,14 @@ until tested.
   coordinator's side-effecting worker. Software mode and preferences
   with different AUR/Flatpak scope also keep the original path.
 - The full CLI shares only unmodified `pamac checkupdates` default-scope
-  results that are **already** in flight or cached. Explicit `--aur`,
-  `--no-aur`, `--devel`, `--no-devel`, `--builddir`, `AURDEST`,
+  repo/AUR results that are **already** in flight or cached. Explicit
+  `--aur`, `--no-aur`, `--devel`, `--no-devel`, `--builddir`, `AURDEST`,
   root, `--refresh-tmp-files-dbs` and `--download-updates` retain
-  their original direct path. Configured `DownloadUpdates` also
-  disables reuse; configured Flatpak support prevents CLI reuse because
-  native CLI intentionally disables Flatpak. Direct custom-scope VCS
-  checks now report 101/102 rather than falsely reporting "up to date".
+  their original direct path. Configured `DownloadUpdates` still disables
+  reuse. **`EnableFlatpak` no longer prevents sharing**; the coordinator
+  filters worker output using category tags, never inferring type from a
+  package's display name or version. Direct custom-scope VCS checks
+  report 101/102 rather than falsely reporting "up to date".
 - `pamac upgrade` always performs its own transaction-time update
   discovery and verification under flock; cached update notification
   data is **not** a safe substitute for transaction validation.
@@ -135,13 +144,19 @@ No integration merges or production releases are authorized.
 
 1. Compile all three projects and inspect compiler results on their feature
    branches. Restart the old coordinator after installing the new library.
-2. With no valid cache, call `TryJoin(default)`. It must return
-   `available=false`. `pamac-checkupdates --join-only` must exit **104**
-   immediately and spawn **no** `--direct` worker.
-3. Invalidate, run `pamac-checkupdates` to seed a complete 0/100 result,
-   then immediately run `pamac-checkupdates --join-only` and
-   `pamac checkupdates --quiet`. Both must return identical updates and
-   exit status without starting another `--direct` worker.
+2. With no valid cache, call `TryJoin(default)` and `TryJoin(repo-aur)`.
+   Both must return `available=false`. Both `pamac-checkupdates --join-only`
+   and `pamac-checkupdates --join-only --repo-aur` must exit **104**
+   immediately and spawn **no** direct worker.
+3. With `EnableFlatpak` configured, invalidate and run `pamac-checkupdates`
+   to seed a complete 0/100 result, then immediately run both
+   `pamac-checkupdates --join-only` (all categories) and
+   `pamac-checkupdates --join-only --repo-aur` (filtered), followed by
+   `pamac checkupdates --quiet`. The full CLI and filtered join must show
+   identical repo/AUR package versions and exit statuses, while the
+   unfiltered join retains any Flatpak updates. No second worker may start.
+   Test a case with **only Flatpak updates**: the filtered join/CLI must
+   return 0 with no package lines while the default result returns 100.
 4. With the cache expired and no active coordinator worker,
    `pamac checkupdates` and `pamac checkupdates --quiet` must retain
    their original native typed formatting and non-refresh behavior.
@@ -176,4 +191,4 @@ No integration merges or production releases are authorized.
 - Automatic GUI retry when an AUR build releases its flock.
 - Production deployment and upstream PR preparation.
 
-**All integration branches remain unchanged.**
+**No integration branches have been merged or changed by this feature work.**
