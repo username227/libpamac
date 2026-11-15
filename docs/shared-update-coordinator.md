@@ -52,10 +52,34 @@ until tested.
 - Only inability to **connect to the service before any request** permits
   the old direct fallback. After a request, errors do not trigger a
   duplicate scan.
-- GUI VCS progress is already enabled for its own update path, but it
-  still performs independent discovery. The native CLI and GUI typed
-  results remain to be migrated; do not treat this as finished
-  three-client coordination.
+- The GTK manager and full `pamac checkupdates` CLI now join a
+  shared default-profile check via the tested `pamac-checkupdates`
+  bridge. After the worker exits with 0/100, they call libpamac's
+  `get_updates_after_shared_check[_async]()` to reconstruct native
+  typed lists from existing AUR/VCS metadata **without rerunning source
+  refresh**. The source read still acquires the AUR flock; if it cannot,
+  the client reports an incomplete result rather than reading mutable data.
+- `Database.updates_match_shared_output()` compares every detected
+  package **and version**, not just the count, before publishing a typed
+  result. A mismatch returns 103 or shows the GUI's incomplete state;
+  it never silently announces `up to date`.
+- The GTK manager's explicit refresh button still refreshes repository
+  databases first, invalidates the coordinator result cache, then joins
+  one VCS refresh. Software mode and changed-scope preferences keep
+  the original direct typed query. The GUI does not currently stream
+  per-package VCS progress from the coordinator's subprocess.
+- The full CLI shares only ordinary `pamac checkupdates` with a
+  matching default profile. Explicit `--aur`/`--no-aur`,
+  `--devel`/`--no-devel`, `--builddir`, `AURDEST`, root,
+  `--refresh-tmp-files-dbs` and `--download-updates` retain their
+  native path to preserve exact semantics. Configured Flatpak support
+  also prevents CLI reuse, because full CLI intentionally disables
+  Flatpak while the standalone checker honors `pamac.conf`.
+- `pamac upgrade` always performs its own transaction-time update
+  discovery and verification under flock; cached update notification
+  data is **not** a safe substitute for transaction validation.
+- No source branch has been merged; all of the GTK and CLI code is
+  currently pending local compilation and runtime tests.
 
 ## Tests before considering a merge
 
@@ -88,13 +112,55 @@ until tested.
 9. Verify subsequent completed checks can drive the tray without a
    second VCS refresh. Test owner disappearance and headless fallback.
 
+## New GTK and full CLI verification (not yet performed)
+
+**Build sequence matters:** install the feature `libpamac` with the new
+public `Database` methods before compiling the feature `pamac` and
+`pamac-cli` against the generated `Pamac-11.vapi`. Confirm all three
+PKGBUILDs target `feature/shared-update-coordinator` and retain the
+integrated build/SONAME fixes; do not merge integration yet.
+
+1. Compile all three projects; resolve any Vala or Meson errors on their
+   respective **feature** branches before installing clients.
+2. From a default non-root environment, invalidate the coordinator cache,
+   run `pamac-checkupdates` and `pamac checkupdates --quiet`, and
+   compare package lines and exit statuses (100 with updates / 0 without).
+   `pamac checkupdates` must retain native verbose formatting and
+   ignored/out-of-date package sections.
+3. Confirm `pamac checkupdates` joins a concurrent
+   `pamac-checkupdates`: at most one `--direct` worker.
+4. Verify `pamac checkupdates --aur --devel` and
+   `pamac checkupdates --builddir=...` stay on the original
+   option-specific path, and neither shares a default-profile result
+   when the requested scope differs. Do not test a custom builddir on
+   the normal source directory without backups.
+5. Close and reopen the GTK manager. On its Updates page, confirm the
+   version shown for `iptvnator-git` exactly matches the standalone
+   checker. Opening an already-checked GUI view should use the 30-second
+   cache and **not** spawn a second VCS refresh.
+6. Click GTK Refresh explicitly. It must sync pacman databases,
+   invalidate the shared cache, start exactly one VCS scan and display
+   the typed package lists. If refresh fails, it must not display a
+   false `Your system is up to date` page.
+7. Hold `/var/tmp/pamac-build-<user>.pamac-aur.lock` externally,
+   invalidate and start the default CLI/GUI checks. The shared worker
+   should return 101, full CLI should preserve that incomplete status,
+   and GTK should show its incomplete state without discarding old
+   update data. No source check should race the held flock.
+8. Exercise appstream/software mode, Flatpak-enabled config, ignored
+   updates, and GUI notification interactions. These must preserve
+   the original typed package behavior and option semantics.
+9. Verify `pamac upgrade` still does fresh transaction-time checks,
+   never installs based solely on the coordinator's cached results.
+   Use dry-run/controlled test environments rather than a real upgrade.
+
 ## Not part of this checkpoint
 
-- Typed update result protocol for the GTK manager and full CLI.
+- Dedicated typed D-Bus serialization (clients currently reconstruct
+  from source metadata under flock after a shared check).
+- Full sharing for alternate/custom CLI profiles.
+- Per-package VCS progress streaming from the coordinator subprocess.
 - Automatic GUI retry when an AUR build releases its flock.
-- CLI streaming progress from the worker; the current direct subprocess
-  sends results only on completion.
-- Translation coverage and GUI incomplete-check banner.
 - Production deployment and upstream PR preparation.
 
 **The currently installed integration branch remains untouched.**
