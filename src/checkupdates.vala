@@ -105,7 +105,24 @@
 							}
 						}
 					});
+				// Independent client-side failsafe: even if the service's
+				// main context stops dispatching its stalled signal, the CLI
+				// exits incomplete rather than waiting indefinitely. Never
+				// terminate or duplicate the source-check worker.
+				uint failsafe = Timeout.add_seconds (135, () => {
+					if (!done) {
+						warning ("Shared check did not answer; keeping known updates");
+						done = true;
+						observed_status = 103;
+						observed_lines = {};
+						if (loop.is_running ()) {
+							loop.quit ();
+						}
+					}
+					return false;
+				});
 				loop.run ();
+				Source.remove (failsafe);
 				Bus.unwatch_name (watcher);
 			}
 			result = observed_status;
