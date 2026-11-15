@@ -57,7 +57,9 @@ until tested.
   bridge. After the worker exits with 0/100, they call libpamac's
   `get_updates_after_shared_check[_async]()` to reconstruct native
   typed lists from existing AUR/VCS metadata **without rerunning source
-  refresh**. The source read still acquires the AUR flock; if it cannot,
+  refresh**. Those methods first reload libalpm's database handles because
+  the coordinator worker may have synchronized repository databases in
+  a separate process. The source read still acquires the AUR flock; if it cannot,
   the client reports an incomplete result rather than reading mutable data.
 - `Database.updates_match_shared_output()` compares every detected
   package **and version**, not just the count, before publishing a typed
