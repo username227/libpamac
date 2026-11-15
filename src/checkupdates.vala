@@ -74,14 +74,13 @@
 			if (!done) {
 				// If the service disappears, stop waiting and return an
 				// incomplete status rather than silently starting a scan.
-				bool owner_seen = false;
 				uint watcher = Bus.watch_name (BusType.SESSION,
 					"org.manjaro.pamac.UpdateCoordinator1", BusNameWatcherFlags.NONE,
 					(conn, name, owner) => {
-						owner_seen = true;
+						// The coordinator is available; keep watching its owner.
 					},
 					(conn, name) => {
-						if (!done && owner_seen) {
+						if (!done) {
 							done = true;
 							observed_status = 103;
 							observed_lines = {};
@@ -165,6 +164,14 @@
 		}
 	}
 
-	public int main () {
+	public int main (string[] args) {
+		if (args.length == 2 && args[1] == "--direct") {
+			// Internal coordinator worker; never recurse into the service.
+			return checkupdates_direct ();
+		}
+		if (args.length != 1) {
+			stderr.printf ("Usage: pamac-checkupdates [--direct]\n");
+			return 2;
+		}
 		return checkupdates ();
 	}
