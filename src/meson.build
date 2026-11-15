@@ -108,7 +108,7 @@ custom_target('pamac typelib', command: [g_ir_compiler, '--shared-library', 'lib
 executable('pamac-daemon',
 	sources: ['version.vala', 'package.vala', 'alpm_package.vala', 'aur_interface.vala', 'utils.vala',
 				'alpm_utils.vala', 'alpm_config.vala', 'pamac_config_daemon.vala', 'daemon.vala', 'plugin_loader.vala',
-				'database.vala', 'appstream_interface.vala', 'snap_interface.vala', 'flatpak_interface.vala'],
+				'database.vala', 'aur_build_lock.vala', 'aur_build_lock.c', 'appstream_interface.vala', 'snap_interface.vala', 'flatpak_interface.vala'],
 	dependencies: [alpm_deps, math, libsoup, polkit, gmodule],
 	vala_args: common_vala_args,
 	c_args: [common_c_args, alpm_c_args],
