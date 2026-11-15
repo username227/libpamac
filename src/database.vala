@@ -2078,7 +2078,10 @@ namespace Pamac {
 			return need_refresh;
 		}
 
-		void get_updates_real (ref Updates updates) {
+		// When a shared coordinator check has just completed, reuse the
+		// already refreshed VCS .SRCINFO while still taking the build flock
+		// for safe reads. Regular calls must continue refreshing sources.
+		void get_updates_real (ref Updates updates, bool refresh_vcs = true) {
 			last_vcs_refresh_success = true;
 			vcs_updates_deferred = false;
 			// be sure we have the good updates
@@ -2137,9 +2140,12 @@ namespace Pamac {
 						source_lock = new AurBuildLock (get_real_aur_build_dir ());
 						int lock_status = source_lock.try_acquire ();
 						if (lock_status == 1) {
-							// Hold the lock while refreshing AND reading source versions.
+							// Lock protects both source updates and version reads.
+							// Shared clients must NEVER repeat makepkg -o or clone.
 							aur_vcs_pkgs.remove_all ();
-							last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, true);
+							if (refresh_vcs) {
+								last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, true);
+							}
 						} else if (lock_status == 0) {
 							vcs_updates_deferred = true;
 							// Another transaction may be actively building. Defer
@@ -2192,6 +2198,30 @@ namespace Pamac {
 		public Updates get_updates () {
 			var updates = new Updates ();
 			get_updates_real (ref updates);
+			return updates;
+		}
+
+		// Use only after pamac-checkupdates finished with a complete 0/100
+		// result for this exact profile. Keeps typed package/ignored lists
+		// without initiating a second VCS source refresh.
+		public Updates get_updates_after_shared_check () {
+			var updates = new Updates ();
+			get_updates_real (ref updates, false);
+			return updates;
+		}
+
+		public async Updates get_updates_after_shared_check_async () {
+			var updates = new Updates ();
+			try {
+				new Thread<int>.try ("get_shared_updates", () => {
+					get_updates_real (ref updates, false);
+					context.invoke (get_updates_after_shared_check_async.callback);
+					return 0;
+				});
+				yield;
+			} catch (Error e) {
+				warning (e.message);
+			}
 			return updates;
 		}
 
