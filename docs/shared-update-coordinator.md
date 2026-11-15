@@ -39,6 +39,8 @@ until tested.
   coordinator **does not kill** the worker or start another VCS scan:
   this avoids leaving Git children without their parent-held flock.
   The existing worker may still finish later and publish its result.
+  The CLI has a separate 135-second fail-safe for the case where the D-Bus
+  service itself stops dispatching signals. Neither guard kills the worker.
 - Statuses: 0=complete/clear, 100=complete/updates,
   101=VCS deferred due to lock, 102=VCS source failure,
   103=incomplete/aborted/invalidated or worker stalled.
