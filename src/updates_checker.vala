@@ -59,7 +59,7 @@ namespace Pamac {
 				coordinator = Bus.get_proxy_sync (BusType.SESSION,
 					"org.manjaro.pamac.UpdateCoordinator1",
 					"/org/manjaro/pamac/UpdateCoordinator1");
-				coordinator.check_finished.connect ((profile, status, lines) => {
+				coordinator.check_finished.connect ((profile, check_id, status, lines) => {
 					if (profile == "default") {
 						apply_shared_result (status, lines);
 					}
