@@ -2241,6 +2241,63 @@ namespace Pamac {
 		}
 
 
+		// A complete coordinator result is only reusable when the local
+		// typed snapshot agrees *exactly* on package names and versions.
+		// This prevents stale .SRCINFO, split package bases or intervening
+		// transactions from silently showing the wrong version in the GUI
+		// or full CLI. Do not compare ignored/out-of-date lists: the
+		// standalone checker deliberately doesn't output those entries.
+		public static bool updates_match_shared_output (Updates updates, string output) {
+			string[] shared_lines = {};
+			if (output.strip () != "") {
+				foreach (string line in output.strip ().split ("\n")) {
+					if (line.length != 0) {
+						shared_lines += line;
+					}
+				}
+			}
+			string[] local_lines = {};
+			foreach (unowned AlpmPackage pkg in updates.repos_updates) {
+				if (pkg.installed_version != null) {
+					local_lines += "%s  %s -> %s".printf (
+						pkg.name, pkg.installed_version, pkg.version);
+				} else {
+					local_lines += "%s  %s".printf (pkg.name, pkg.version);
+				}
+			}
+			foreach (unowned AURPackage pkg in updates.aur_updates) {
+				local_lines += "%s  %s -> %s".printf (
+					pkg.name, pkg.installed_version, pkg.version);
+			}
+			foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
+				unowned string? app_name = pkg.app_name;
+				if (app_name == null) {
+					local_lines += "%s  %s".printf (pkg.name, pkg.version);
+				} else {
+					local_lines += "%s  %s".printf (app_name, pkg.version);
+				}
+			}
+			if (shared_lines.length != local_lines.length) {
+				return false;
+			}
+			// Package names are unique within one update snapshot. Order
+			// can differ between separate libalpm/AUR fetches, so compare
+			// complete formatted lines without relying on array ordering.
+			foreach (unowned string expected in shared_lines) {
+				bool match_found = false;
+				foreach (unowned string found in local_lines) {
+					if (expected == found) {
+						match_found = true;
+						break;
+					}
+				}
+				if (!match_found) {
+					return false;
+				}
+			}
+			return true;
+		}
+
 		// Report progress from the worker on the main context, not its thread.
 		void report_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
 			string package_copy = pkgname;
