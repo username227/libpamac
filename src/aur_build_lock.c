@@ -7,7 +7,7 @@
 #include <unistd.h>
 
 int
-pamac_aur_build_lock_try (const char *path)
+pamac_aur_lock_fd_try (const char *path)
 {
     int fd = open (path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0)
@@ -31,7 +31,7 @@ pamac_aur_build_lock_try (const char *path)
 }
 
 void
-pamac_aur_build_lock_release (int fd)
+pamac_aur_lock_fd_release (int fd)
 {
     if (fd >= 0)
         close (fd);
