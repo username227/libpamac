@@ -74,7 +74,10 @@ until tested.
   matching default profile. Explicit `--aur`/`--no-aur`,
   `--devel`/`--no-devel`, `--builddir`, `AURDEST`, root,
   `--refresh-tmp-files-dbs` and `--download-updates` retain their
-  native path to preserve exact semantics. Configured Flatpak support
+  native path to preserve exact semantics. A configured `DownloadUpdates`
+  setting also disables GTK/full-CLI reuse, since the standalone bridge
+  would pre-download packages that those clients did not request.
+  Configured Flatpak support
   also prevents CLI reuse, because full CLI intentionally disables
   Flatpak while the standalone checker honors `pamac.conf`.
 - `pamac upgrade` always performs its own transaction-time update
