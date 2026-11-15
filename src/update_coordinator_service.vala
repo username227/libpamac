@@ -116,6 +116,19 @@ namespace Pamac {
 				}
 			}
 
+			// Preserve pamac-checkupdates' existing optional behavior:
+			// refresh the files databases and pre-download packages only
+			// when an update check has completed successfully.
+			if (!database.vcs_updates_deferred &&
+				database.last_vcs_refresh_success && found.length > 0) {
+				own_db_refresh = true;
+				yield transaction.refresh_files_dbs_async ();
+				if (config.download_updates) {
+					yield transaction.download_updates_async ();
+				}
+				own_db_refresh = false;
+			}
+
 			if (database.vcs_updates_deferred) {
 				result = 101;
 			} else if (!database.last_vcs_refresh_success) {
