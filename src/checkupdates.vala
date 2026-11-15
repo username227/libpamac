@@ -17,9 +17,9 @@
  *  along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-	// This lightweight entry point is used by the tray as well as scripts.
-	// Prefer the shared session coordinator; keep the original direct path
-	// for headless, root, and non-D-Bus environments.
+	// The coordinator responds immediately; completion is delivered via
+	// CheckFinished. A second request joins the same child process.
+	// Only absence of the service permits a standalone fallback.
 	public int checkupdates () {
 		Pamac.UpdateCoordinator coordinator;
 		try {
@@ -27,37 +27,80 @@
 				BusType.SESSION, "org.manjaro.pamac.UpdateCoordinator1",
 				"/org/manjaro/pamac/UpdateCoordinator1");
 		} catch (Error e) {
-			// Only fall back if we cannot connect before a check starts.
 			warning ("Update coordinator unavailable: %s", e.message);
 			return checkupdates_direct ();
 		}
-		{
-			int status = -1;
-			string[] results = {};
-			bool received = false;
-			var loop = new MainLoop ();
-			coordinator.check.begin ("default", false, (obj, res) => {
-				try {
-					coordinator.check.end (res, out status, out results);
-					received = true;
-				} catch (Error e) {
-					warning ("Coordinator check failed: %s", e.message);
-				}
-				loop.quit ();
-			});
-			loop.run ();
-			if (received) {
-				foreach (unowned string line in results) {
-					stdout.printf ("%s\n", line);
-				}
-				return status;
+
+		var loop = new MainLoop ();
+		bool done = false;
+		uint64 observed_id = 0;
+		int observed_status = 103;
+		string[] observed_lines = {};
+		uint64 expected_id = 0;
+		coordinator.check_finished.connect ((profile, id, status, lines) => {
+			if (profile != "default") {
+				return;
 			}
-			// The coordinator may still be running after a D-Bus timeout.
-			// Never start an independent scan at that point: it can race
-			// with the shared VCS refresh and defeats single-flight.
-			// Return an explicit incomplete result instead.
+			// Also capture an extremely fast response emitted while our
+			// synchronous D-Bus request is in flight, before it returns id.
+			observed_id = id;
+			observed_status = status;
+			observed_lines = lines;
+			if (expected_id != 0 && id == expected_id) {
+				done = true;
+				if (loop.is_running ()) {
+					loop.quit ();
+				}
+			}
+		});
+
+		bool running = false;
+		int result = 103;
+		string[] results = {};
+		try {
+			coordinator.request_check ("default", false,
+				out running, out expected_id, out result, out results);
+		} catch (Error e) {
+			// The service may have accepted another request already.
+			// Never launch a second VCS source scan on D-Bus failure.
+			warning ("Shared update request failed: %s", e.message);
 			return 103;
 		}
+
+		if (running) {
+			if (observed_id == expected_id) {
+				done = true;
+			}
+			if (!done) {
+				// If the service disappears, stop waiting and return an
+				// incomplete status rather than silently starting a scan.
+				bool owner_seen = false;
+				uint watcher = Bus.watch_name (BusType.SESSION,
+					"org.manjaro.pamac.UpdateCoordinator1", BusNameWatcherFlags.NONE,
+					(conn, name, owner) => {
+						owner_seen = true;
+					},
+					(conn, name) => {
+						if (!done && owner_seen) {
+							done = true;
+							observed_status = 103;
+							observed_lines = {};
+							if (loop.is_running ()) {
+								loop.quit ();
+							}
+						}
+					});
+				loop.run ();
+				Bus.unwatch_name (watcher);
+			}
+			result = observed_status;
+			results = observed_lines;
+		}
+
+		foreach (unowned string line in results) {
+			stdout.printf ("%s\n", line);
+		}
+		return result;
 	}
 
 	public int checkupdates_direct () {
