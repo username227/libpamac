@@ -109,7 +109,9 @@
 				// main context stops dispatching its stalled signal, the CLI
 				// exits incomplete rather than waiting indefinitely. Never
 				// terminate or duplicate the source-check worker.
+				bool failsafe_fired = false;
 				uint failsafe = Timeout.add_seconds (135, () => {
+					failsafe_fired = true;
 					if (!done) {
 						warning ("Shared check did not answer; keeping known updates");
 						done = true;
@@ -122,7 +124,9 @@
 					return false;
 				});
 				loop.run ();
-				Source.remove (failsafe);
+				if (!failsafe_fired) {
+					Source.remove (failsafe);
+				}
 				Bus.unwatch_name (watcher);
 			}
 			result = observed_status;
