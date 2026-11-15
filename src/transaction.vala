@@ -65,8 +65,6 @@ namespace Pamac {
 		public bool install_as_dep { get; set; }
 		public bool install_as_explicit { get; set; }
 		public bool no_refresh { get; set; }
-		// CLI opt-in: check every VCS source before assembling AUR upgrades.
-		public bool refresh_vcs_before_upgrade { get; set; }
 
 		public signal void emit_action (string action);
 		public signal void emit_action_progress (string action, string status, double progress);
@@ -111,7 +109,6 @@ namespace Pamac {
 			install_as_dep = false;
 			install_as_explicit = false;
 			no_refresh = false;
-			refresh_vcs_before_upgrade = false;
 			// run transaction data
 			sysupgrading = false;
 			force_refresh = false;
@@ -1319,19 +1316,18 @@ namespace Pamac {
 			}
 			if (sysupgrading) {
 				if (config.check_aur_updates) {
-					// CLI runs a complete, awaited VCS refresh after the package
-					// databases are refreshed, before deciding what to build.
-					if (refresh_vcs_before_upgrade && config.check_aur_vcs_updates) {
+					// The sole AUR update query now refreshes VCS sources itself.
+					// Await it before selecting any build candidates.
+					if (config.check_aur_vcs_updates) {
 						emit_action (dgettext (null, "Checking development package sources") + "...");
-						bool vcs_ok = yield database.refresh_vcs_sources_for_upgrade_async ();
-						if (!vcs_ok) {
-							var details = new GenericArray<string> (1);
-							details.add (dgettext (null, "One or more VCS sources could not be refreshed; upgrade cancelled to avoid stale build information"));
-							emit_error (dgettext (null, "Failed to refresh development sources"), details);
-							return false;
-						}
 					}
 					var updates = yield database.get_aur_updates_async (ignorepkgs);
+					if (!database.last_vcs_refresh_success) {
+						var details = new GenericArray<string> (1);
+						details.add (dgettext (null, "One or more VCS sources could not be refreshed; upgrade cancelled to avoid stale build information"));
+						emit_error (dgettext (null, "Failed to refresh development sources"), details);
+						return false;
+					}
 					foreach (unowned AURPackage aur_pkg in updates.aur_updates) {
 						add_pkg_to_build (aur_pkg.name, true, true);
 					}
