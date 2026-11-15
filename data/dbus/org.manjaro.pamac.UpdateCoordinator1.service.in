@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=org.manjaro.pamac.UpdateCoordinator1
+Exec=@bindir@/pamac-update-coordinator
