@@ -79,7 +79,7 @@ endif
 libpamac = library('pamac',
 	sources: ['package.vala', 'alpm_package.vala', 'utils.vala',
 			'plugin_loader.vala', 'alpm_config.vala', 'pamac_config.vala', 'version.vala',
-			'aur_interface.vala', 'database.vala', 'transaction.vala', 'alpm_utils.vala',
+			'aur_interface.vala', 'database.vala', 'transaction.vala', 'aur_build_lock.vala', 'aur_build_lock.c', 'alpm_utils.vala',
 			'transaction_interface.vala', 'transaction_interface_root.vala', 'daemon_interface.vala',
 			'transaction_interface_daemon.vala', 'snap_interface.vala', 'flatpak_interface.vala',
 			'appstream_interface.vala', 'updates_checker.vala'],
