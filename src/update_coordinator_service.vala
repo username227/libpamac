@@ -34,6 +34,14 @@ namespace Pamac {
 			}
 		}
 
+		private string[] copy_lines (string[] source) {
+			string[] copy = {};
+			foreach (unowned string line in source) {
+				copy += line;
+			}
+			return copy;
+		}
+
 		public void invalidate () throws IOError {
 			invalidation_epoch++;
 			completed_at = 0;
@@ -57,7 +65,7 @@ namespace Pamac {
 					yield;
 				}
 				exit_status = last_status;
-				updates = last_updates;
+				updates = copy_lines (last_updates);
 				return;
 			}
 
@@ -68,7 +76,7 @@ namespace Pamac {
 				(last_status == 0 || last_status == 100) &&
 				GLib.get_monotonic_time () - completed_at < 30 * TimeSpan.SECOND) {
 				exit_status = last_status;
-				updates = last_updates;
+				updates = copy_lines (last_updates);
 				return;
 			}
 
@@ -142,7 +150,7 @@ namespace Pamac {
 				result = 103;
 			}
 			last_status = result;
-			last_updates = found;
+			last_updates = copy_lines (found);
 			completed_at = (result == 0 || result == 100) ?
 				GLib.get_monotonic_time () : 0;
 			checking = false;
