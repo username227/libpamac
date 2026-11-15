@@ -24,6 +24,9 @@ namespace Pamac {
 		Alpm.Handle? files_handle;
 		HashTable<string, AURPackageLinked> aur_vcs_pkgs;
 		public bool last_vcs_refresh_success { get; private set; }
+		// True when a GUI/background update query intentionally omitted VCS
+		// packages because another Pamac transaction owns the build lock.
+		public bool vcs_updates_deferred { get; private set; }
 		HashTable<unowned string, AlpmPackageLinked> pkgs_cache;
 		HashTable<unowned string, AURPackageLinked> aur_pkgs_cache;
 		GenericArray<string> mirrors_countries;
@@ -55,6 +58,7 @@ namespace Pamac {
 			context = MainContext.default ();
 			aur_vcs_pkgs = new HashTable<string, AURPackageLinked> (str_hash, str_equal);
 			last_vcs_refresh_success = true;
+			vcs_updates_deferred = false;
 			pkgs_cache = new HashTable<unowned string, AlpmPackageLinked> (str_hash, str_equal);
 			aur_pkgs_cache = new HashTable<unowned string, AURPackageLinked> (str_hash, str_equal);
 			// get_user_agent defined in utils.vala
@@ -2076,6 +2080,7 @@ namespace Pamac {
 
 		void get_updates_real (ref Updates updates) {
 			last_vcs_refresh_success = true;
+			vcs_updates_deferred = false;
 			// be sure we have the good updates
 			lock (alpm_config) {
 				// count this step as 5% of the total
@@ -2136,6 +2141,7 @@ namespace Pamac {
 							aur_vcs_pkgs.remove_all ();
 							last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, false);
 						} else if (lock_status == 0) {
+							vcs_updates_deferred = true;
 							// Another transaction may be actively building. Defer
 							// VCS packages rather than inspecting mutable .SRCINFO.
 							var safe_local_pkgs = new GenericArray<string> ();
