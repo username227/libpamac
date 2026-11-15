@@ -12,6 +12,7 @@
 namespace Pamac {
 	public class UpdateCoordinatorService : Object, UpdateCoordinator {
 		bool checking = false;
+		bool stalled = false;
 		uint64 generation = 0;
 		uint invalidation_epoch = 0;
 		uint pending_epoch = 0;
@@ -73,6 +74,7 @@ namespace Pamac {
 				GLib.get_monotonic_time () : 0;
 			worker = null;
 			checking = false;
+			stalled = false;
 			message ("Pamac shared update check finished: status %d, %u result lines",
 				status, (uint) lines.length);
 			check_finished ("default", id, status, copy_lines (lines));
@@ -88,8 +90,13 @@ namespace Pamac {
 			status = last_status;
 			updates = copy_lines (last_updates);
 			if (checking) {
-				// Another client joins the existing worker without taking flock.
-				running = true;
+				// A stalled worker remains tracked and MUST NOT be duplicated.
+				// Clients receive incomplete status without waiting forever.
+				running = !stalled;
+				if (stalled) {
+					status = 103;
+					updates = {};
+				}
 				return;
 			}
 			if (!force && completed_at != 0 &&
@@ -102,6 +109,7 @@ namespace Pamac {
 			generation++;
 			check_id = generation;
 			checking = true;
+			stalled = false;
 			pending_epoch = invalidation_epoch;
 			running = true;
 			status = 103;
@@ -118,15 +126,16 @@ namespace Pamac {
 				worker = proc;
 				uint64 id = check_id;
 
-				// Fail closed if a worker stops responding entirely. This is
-				// a safety watchdog, not a D-Bus timeout extension. A failure
-				// never launches another VCS refresh or clears tray state.
+				// This diagnostic guard stops CLI clients waiting forever,
+				// without terminating Git or dropping our AUR flock early.
+				// Keep ownership of this worker until it really exits, even
+				// after notifying waiting clients of incomplete status.
 				watchdog_source = Timeout.add_seconds (120, () => {
 					watchdog_source = 0;
 					if (checking && id == generation) {
-						warning ("Pamac shared check worker did not finish; terminating it");
-						proc.force_exit ();
-						finish_check (id, 103, {});
+						stalled = true;
+						warning ("Pamac shared check worker still running; preserving its AUR lock");
+						check_stalled ("default", id);
 					}
 					return false;
 				});
