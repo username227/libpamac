@@ -31,9 +31,14 @@ until tested.
   `CheckFinished(profile, check_id, status, updates)`.
 - The tray also subscribes to the result. Only a complete check may
   clear its previous update indicator.
-- Completed 0/100 results are cached for 30 seconds unless invalidated
-  after a pacman database lock event. A DB mutation during a check
-  conservatively results in incomplete status 103.
+- Completed 0/100 results are cached for 30 seconds unless invalidated.
+  We watch **installed-package DB entry changes** in `<DBPath>/local`,
+  rather than deletion of `db.lck`. A normal sync database refresh by the
+  worker may create and delete `db.lck` without changing installed packages;
+  the old watcher incorrectly downgraded real update results from 100 to 103.
+  In-flight installed-package changes still conservatively return 103.
+  External *sync-only* refreshes are not automatically detected by this
+  monitor; their cache staleness is bounded by the 30-second TTL.
 - A 120-second **diagnostic** watchdog marks a worker stalled and emits
   `CheckStalled`. Waiting CLI calls return 103 (incomplete). The
   coordinator **does not kill** the worker or start another VCS scan:
@@ -76,10 +81,10 @@ until tested.
 7. Check status 101/102 and the 120-second stalled signal:
    state 103 must never clear a known update; no second worker
    may be started while the original one is alive.
-8. Verify external pacman database changes invalidate results, and
-   that intentional database refresh in the worker is not mistaken
-   for an external transaction. This is a known conservative edge
-   case requiring explicit attention.
+8. Verify that the worker's own repository-db refresh does **not**
+   return 103 when a real update exists. Verify a real local-package
+   installation or removal invalidates the cache, including during a check.
+   Explicit `Invalidate()` also must invalidate it.
 9. Verify subsequent completed checks can drive the tray without a
    second VCS refresh. Test owner disappearance and headless fallback.
 
