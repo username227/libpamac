@@ -23,8 +23,6 @@ namespace Pamac {
 		Alpm.Handle? alpm_handle;
 		Alpm.Handle? files_handle;
 		HashTable<string, AURPackageLinked> aur_vcs_pkgs;
-		// Versions produced by isolated VCS checks, never by the active build tree.
-		HashTable<string, string> vcs_checked_versions;
 		public bool last_vcs_refresh_success { get; private set; }
 		HashTable<unowned string, AlpmPackageLinked> pkgs_cache;
 		HashTable<unowned string, AURPackageLinked> aur_pkgs_cache;
@@ -56,7 +54,6 @@ namespace Pamac {
 			alpm_config = config.alpm_config;
 			context = MainContext.default ();
 			aur_vcs_pkgs = new HashTable<string, AURPackageLinked> (str_hash, str_equal);
-			vcs_checked_versions = new HashTable<string, string> (str_hash, str_equal);
 			last_vcs_refresh_success = true;
 			pkgs_cache = new HashTable<unowned string, AlpmPackageLinked> (str_hash, str_equal);
 			aur_pkgs_cache = new HashTable<unowned string, AURPackageLinked> (str_hash, str_equal);
@@ -1730,7 +1727,7 @@ namespace Pamac {
 					cmdline.add ("fetch");
 					cmdline.add ("-q");
 					status = launch_subprocess (launcher, cmdline, cancellable);
-					if (cancellable.is_cancelled ()) {
+					if (cancellable != null && cancellable.is_cancelled ()) {
 						return null;
 					}
 					// write diff file
@@ -2130,22 +2127,48 @@ namespace Pamac {
 					flatpak_plugin.get_flatpak_updates (ref flatpak_updates);
 				}
 				if (config.check_aur_updates) {
-					if (config.check_aur_vcs_updates) {
-						last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, false);
-						if (!last_vcs_refresh_success) {
+					AurBuildLock? source_lock = null;
+					if (config.check_aur_vcs_updates && vcs_local_pkgs.length > 0) {
+						source_lock = new AurBuildLock (get_real_aur_build_dir ());
+						int lock_status = source_lock.try_acquire ();
+						if (lock_status == 1) {
+							// Hold the lock while refreshing AND reading source versions.
+							aur_vcs_pkgs.remove_all ();
+							last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, false);
+						} else if (lock_status == 0) {
+							// Another transaction may be actively building. Defer
+							// VCS packages rather than inspecting mutable .SRCINFO.
+							var safe_local_pkgs = new GenericArray<string> ();
+							foreach (unowned string name in local_pkgs) {
+								if (!vcs_local_pkgs.find_with_equal_func (name, str_equal)) {
+									safe_local_pkgs.add (name);
+								}
+							}
+							local_pkgs = safe_local_pkgs;
+							vcs_local_pkgs = new GenericArray<string> ();
 							context.invoke (() => {
-								emit_warning ("Some development package sources could not be refreshed; AUR update results may be incomplete");
+								emit_warning ("Development package checks deferred while Pamac is building");
 								return false;
 							});
+						} else {
+							last_vcs_refresh_success = false;
 						}
 					}
-					// count this step as 5% of the total
 					context.invoke (() => {
 						get_updates_progress (95);
 						return false;
 					});
 					if (last_vcs_refresh_success) {
-					get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
+						get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
+					} else {
+						context.invoke (() => {
+							emit_warning ("Development package source check failed; AUR update results are incomplete");
+							return false;
+						});
+					}
+					// Release only after all package versions have been read.
+					if (source_lock != null) {
+						source_lock.release ();
 					}
 					context.invoke (() => {
 						get_updates_progress (100);
@@ -2194,164 +2217,62 @@ namespace Pamac {
 			});
 		}
 
-		// Parse metadata generated after updating a VCS source in the cache.
-		bool read_checked_vcs_version (string info, string pkgname) {
-			string epoch = "";
-			string pkgver = "";
-			string pkgrel = "";
-			bool matched_package = false;
-			foreach (unowned string raw_line in info.split ("\n")) {
-				string line = raw_line.strip ();
-				if (line.has_prefix ("epoch = ")) {
-					epoch = line.substring ("epoch = ".length);
-				} else if (line.has_prefix ("pkgver = ")) {
-					pkgver = line.substring ("pkgver = ".length);
-				} else if (line.has_prefix ("pkgrel = ")) {
-					pkgrel = line.substring ("pkgrel = ".length);
-				} else if (line.has_prefix ("pkgname = ")) {
-					if (line.substring ("pkgname = ".length) == pkgname) {
-						matched_package = true;
-					}
-				}
-			}
-			if (!matched_package || pkgver == "" || pkgrel == "") {
-				return false;
-			}
-			string version = (epoch == "" ? "" : epoch + ":") + pkgver + "-" + pkgrel;
-			vcs_checked_versions.insert (pkgname, version);
-			return true;
-		}
-
-		// Both GUI and CLI use this single checker. VCS checkouts live in a
-		// dedicated persistent cache, NEVER in the actual AUR build folders.
-		// flock serializes competing Pamac processes checking the same package.
+		// This is the only source checker, shared by GUI and CLI.
+		// Call only while holding the transaction-wide AUR build lock.
 		bool refresh_vcs_sources (GenericArray<string> vcs_local_pkgs, bool report_progress) {
-			vcs_checked_versions.remove_all ();
-			aur_vcs_pkgs.remove_all ();
+			bool success = true;
 			uint total = vcs_local_pkgs.length;
 			uint current = 0;
-			if (total == 0) {
-				if (report_progress) {
-					report_vcs_refresh_progress ("", 0, 0, "empty");
-				}
-				return true;
+			if (report_progress && total == 0) {
+				report_vcs_refresh_progress ("", 0, 0, "empty");
 			}
-
-			string build_root = get_real_aur_build_dir ();
-			var build_directory = File.new_for_path (build_root);
-			if (!build_directory.query_exists ()) {
-				try {
-					build_directory.make_directory_with_parents ();
-				} catch (Error e) {
-					warning ("Cannot create AUR build directory: %s", e.message);
-					return false;
-				}
-			}
-			string cache_root = Path.build_filename (build_root, ".vcs-refresh-cache");
-			var setup = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
-			setup.set_cwd (build_root);
-			GenericArray<string> mkdir_cmd = get_dynamic_user_cmdline (build_root);
-			mkdir_cmd.add ("mkdir");
-			mkdir_cmd.add ("-p");
-			mkdir_cmd.add (cache_root);
-			if (launch_subprocess (setup, mkdir_cmd) != 0) {
-				warning ("Cannot create isolated VCS cache %s", cache_root);
-				return false;
-			}
-
-			// The script is executed under flock with positional arguments,
-			// never shell-interpolated package names or remote URLs. Updates
-			// the AUR PKGBUILD and VCS source ONLY in the dedicated cache.
-			string script =
-				"set -eu\n" +
-				"pkgdir=\"$1\"\n" +
-				"url=\"$2\"\n" +
-				"printf '@@PAMAC_VCS_LOCKED@@\\n'\n" +
-				"if test -d \"$pkgdir/.git\"; then\n" +
-				"  if ! git -C \"$pkgdir\" fetch -q origin || ! git -C \"$pkgdir\" reset --hard -q origin/master; then\n" +
-				"    rm -rf -- \"$pkgdir\"\n" +
-				"    git clone -q --depth=1 -- \"$url\" \"$pkgdir\"\n" +
-				"  fi\n" +
-				"else\n" +
-				"  rm -rf -- \"$pkgdir\"\n" +
-				"  git clone -q --depth=1 -- \"$url\" \"$pkgdir\"\n" +
-				"fi\n" +
-				"cd \"$pkgdir\"\n" +
-				"export SRCDEST=\"$pkgdir/.vcs-src\"\n" +
-				"export BUILDDIR=\"$pkgdir/.vcs-build\"\n" +
-				"mkdir -p \"$SRCDEST\" \"$BUILDDIR\"\n" +
-				"makepkg --nobuild --noprepare --nodeps --skipinteg >/dev/null 2>&1\n" +
-				"printf '@@PAMAC_VCS_METADATA@@\\n'\n" +
-				"makepkg --printsrcinfo\n";
-
-			bool success = true;
 			foreach (unowned string pkgname in vcs_local_pkgs) {
 				current++;
 				if (report_progress) {
 					report_vcs_refresh_progress (pkgname, current, total, "start");
 				}
+				// Get the latest AUR build instructions, then refresh VCS sources.
 				AURInfos? aur_infos = aur_plugin.get_infos (pkgname);
 				if (aur_infos == null) {
+					// Locally installed VCS packages do not necessarily exist in AUR.
 					if (report_progress) {
 						report_vcs_refresh_progress (pkgname, current, total, "missing");
 					}
 					continue;
 				}
-				string pkgdir = Path.build_filename (cache_root, pkgname);
-				string lockfile = Path.build_filename (cache_root, "." + pkgname + ".lock");
-				var launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_SILENCE);
-				launcher.set_cwd (cache_root);
-				GenericArray<string> cmdline = get_dynamic_user_cmdline (cache_root);
-				cmdline.add ("flock");
-				cmdline.add ("-x");
-				cmdline.add (lockfile);
-				cmdline.add ("bash");
-				cmdline.add ("-c");
-				cmdline.add (script);
-				cmdline.add ("pamac-vcs-refresh");
-				cmdline.add (pkgdir);
-				cmdline.add ("https://aur.archlinux.org/%s.git".printf (aur_infos.packagebase));
-				cmdline.length = cmdline.length + 1;
-
-				if (report_progress) {
-					report_vcs_refresh_progress (pkgname, current, total, "waiting");
-				}
-				bool exited_successfully = false;
-				bool metadata_started = false;
-				var metadata = new StringBuilder ();
-				try {
-					Subprocess process = launcher.spawnv (cmdline.data);
-					var dis = new DataInputStream (process.get_stdout_pipe ());
-					string? line;
-					while ((line = dis.read_line ()) != null) {
-						string stripped = line.strip ();
-						if (stripped == "@@PAMAC_VCS_LOCKED@@") {
-							if (report_progress) {
-								report_vcs_refresh_progress (pkgname, current, total, "source");
-							}
-						} else if (stripped == "@@PAMAC_VCS_METADATA@@") {
-							metadata_started = true;
-							if (report_progress) {
-								report_vcs_refresh_progress (pkgname, current, total, "metadata");
-							}
-						} else if (metadata_started) {
-							metadata.append (line);
-							metadata.append ("\n");
-						}
-					}
-					process.wait ();
-					exited_successfully = process.get_if_exited () && process.get_exit_status () == 0;
-				} catch (Error e) {
-					warning ("VCS refresh failed for %s: %s", pkgname, e.message);
-				}
-
-				if (!exited_successfully) {
+				File? clone_dir = clone_build_files (aur_infos.packagebase, false, null);
+				if (clone_dir == null) {
 					success = false;
 					if (report_progress) {
-						report_vcs_refresh_progress (pkgname, current, total,
-							metadata_started ? "metadata-failed" : "source-failed");
+						report_vcs_refresh_progress (pkgname, current, total, "clone-failed");
 					}
-				} else if (!read_checked_vcs_version (metadata.str, pkgname)) {
+					continue;
+				}
+				if (report_progress) {
+					report_vcs_refresh_progress (pkgname, current, total, "source");
+				}
+				// Avoid verbose child output; report the package and phase instead.
+				var launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
+				string cwd = clone_dir.get_path ();
+				launcher.set_cwd (cwd);
+				GenericArray<string> cmdline = get_dynamic_user_cmdline (cwd);
+				cmdline.add ("makepkg");
+				cmdline.add ("--nobuild");
+				cmdline.add ("--noprepare");
+				cmdline.add ("--nodeps");
+				cmdline.add ("--skipinteg");
+				int status = launch_subprocess (launcher, cmdline);
+				if (status != 0) {
+					success = false;
+					if (report_progress) {
+						report_vcs_refresh_progress (pkgname, current, total, "source-failed");
+					}
+					continue;
+				}
+				if (report_progress) {
+					report_vcs_refresh_progress (pkgname, current, total, "metadata");
+				}
+				if (!regenerate_srcinfo (clone_dir.get_basename (), null)) {
 					success = false;
 					if (report_progress) {
 						report_vcs_refresh_progress (pkgname, current, total, "metadata-failed");
@@ -2363,16 +2284,44 @@ namespace Pamac {
 			return success;
 		}
 
-		// Only versions checked in this invocation may be used to decide upgrades.
 		HashTable<string, string> get_vcs_last_version (GenericArray<string> vcs_local_pkgs) {
-			var versions = new HashTable<string, string> (str_hash, str_equal);
+			var pkgnames_table = new HashTable<string, string> (str_hash, str_equal);
+			unowned string real_aur_build_dir = get_real_aur_build_dir ();
 			foreach (unowned string pkgname in vcs_local_pkgs) {
-				unowned string? checked_version = vcs_checked_versions.lookup (pkgname);
-				if (checked_version != null) {
-					versions.insert (pkgname, checked_version);
+				if (aur_vcs_pkgs.contains (pkgname)) {
+					continue;
+				}
+				var pkgdir = File.new_for_path (Path.build_filename (real_aur_build_dir, pkgname));
+				if (pkgdir.query_exists ()) {
+					var srcinfo = pkgdir.get_child (".SRCINFO");
+					try {
+						// read .SRCINFO
+						var dis = new DataInputStream (srcinfo.read ());
+						string? line;
+						var version = new StringBuilder ("");
+						while ((line = dis.read_line ()) != null) {
+							if ("pkgver = " in line) {
+								version.append (line.split (" = ", 2)[1]);
+							} else if ("pkgrel = " in line) {
+								version.append ("-");
+								version.append (line.split (" = ", 2)[1]);
+							} else if ("epoch = " in line) {
+								version.prepend (":");
+								version.prepend (line.split (" = ", 2)[1]);
+							} else if ("pkgname = " in line) {
+								string pkgname_found = line.split (" = ", 2)[1];
+								if (vcs_local_pkgs.find_with_equal_func (pkgname_found, str_equal)) {
+									pkgnames_table.insert ((owned) pkgname_found, version.str);
+								}
+							}
+						}
+					} catch (Error e) {
+						warning (e.message);
+						continue;
+					}
 				}
 			}
-			return versions;
+			return pkgnames_table;
 		}
 
 		void get_aur_updates_real (GenericArray<unowned AURInfos> aur_infos_list, GenericArray<string> vcs_local_pkgs, ref Updates updates) {
@@ -2461,8 +2410,9 @@ namespace Pamac {
 							}
 							pkgcache.next ();
 						}
-						// This is the same source check used by GUI update listings.
-						// Wait for it here, before calculating CLI build candidates.
+						// Called by Transaction.run_async() while holding the exclusive
+						// AUR build lock, from selection through build/install.
+						aur_vcs_pkgs.remove_all ();
 						last_vcs_refresh_success = !config.check_aur_vcs_updates ||
 							refresh_vcs_sources (vcs_local_pkgs, true);
 						if (last_vcs_refresh_success) {
