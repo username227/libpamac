@@ -11,6 +11,9 @@ namespace Pamac {
 	public interface UpdateCoordinator : Object {
 		// Version 1 currently supports only "default", using /etc/pamac.conf.
 		// Other scopes must never silently share incompatible results.
+		// VCS refreshes can take many minutes; GLib's default D-Bus timeout
+		// is only about 25 seconds. Set a bounded 10-minute method timeout.
+		[DBus (timeout = 600000)]
 		public abstract async void check (string profile, bool force,
 			out int exit_status, out string[] updates) throws IOError;
 
