@@ -194,7 +194,7 @@
 			}
 			foreach (unowned Pamac.AlpmPackage pkg in updates.repos_updates) {
 				if (categorized) {
-					stdout.printf ("R\\t");
+					stdout.printf ("R\t");
 				}
 				if (pkg.installed_version != null) {
 					stdout.printf ("%s  %s -> %s\n", pkg.name, pkg.installed_version, pkg.version);
@@ -205,13 +205,13 @@
 			}
 			foreach (unowned Pamac.AURPackage pkg in updates.aur_updates) {
 				if (categorized) {
-					stdout.printf ("A\\t");
+					stdout.printf ("A\t");
 				}
 				stdout.printf ("%s  %s -> %s\n", pkg.name, pkg.installed_version, pkg.version);
 			}
 			foreach (unowned Pamac.FlatpakPackage pkg in updates.flatpak_updates) {
 				if (categorized) {
-					stdout.printf ("F\\t");
+					stdout.printf ("F\t");
 				}
 				unowned string? app_name = pkg.app_name;
 				if (app_name == null) {
