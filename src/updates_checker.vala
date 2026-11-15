@@ -24,6 +24,7 @@ namespace Pamac {
 		uint check_lock_timeout_id;
 		GLib.File _lock;
 		FileMonitor lock_monitor;
+		UpdateCoordinator? coordinator;
 		uint16 _updates_nb;
 		string[] _updates_list;
 		public uint16 updates_nb { get { return _updates_nb; } }
@@ -50,6 +51,42 @@ namespace Pamac {
 				lock_monitor.changed.connect (on_lock_changed);
 			} catch (Error e) {
 				warning (e.message);
+			}
+			// Receive results from checks triggered by any connected client.
+			// The tray does not need to rerun VCS discovery for a completed
+			// shared result, even when another process requested the check.
+			try {
+				coordinator = Bus.get_proxy_sync (BusType.SESSION,
+					"org.manjaro.pamac.UpdateCoordinator1",
+					"/org/manjaro/pamac/UpdateCoordinator1");
+				coordinator.check_finished.connect ((profile, status, lines) => {
+					if (profile == "default") {
+						apply_shared_result (status, lines);
+					}
+				});
+			} catch (Error e) {
+				// Older/non-session installs still use pamac-checkupdates.
+				message ("Shared update coordinator not available: %s", e.message);
+			}
+		}
+
+		void apply_shared_result (int status, string[] lines) {
+			if (status == 0) {
+				_updates_nb = 0;
+				_updates_list = {};
+				updates_available (0);
+			} else if (status == 100) {
+				_updates_nb = (uint16) lines.length;
+				_updates_list = lines;
+				updates_available (_updates_nb);
+			} else {
+				// An incomplete result must never clear an existing update.
+				if (lines.length > _updates_nb) {
+					_updates_nb = (uint16) lines.length;
+					_updates_list = lines;
+					updates_available (_updates_nb);
+				}
+				updates_incomplete (status == 101);
 			}
 		}
 
