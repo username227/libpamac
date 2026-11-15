@@ -23,6 +23,9 @@ namespace Pamac {
 		Alpm.Handle? alpm_handle;
 		Alpm.Handle? files_handle;
 		HashTable<string, AURPackageLinked> aur_vcs_pkgs;
+		// Versions produced by isolated VCS checks, never by the active build tree.
+		HashTable<string, string> vcs_checked_versions;
+		public bool last_vcs_refresh_success { get; private set; default = true; }
 		HashTable<unowned string, AlpmPackageLinked> pkgs_cache;
 		HashTable<unowned string, AURPackageLinked> aur_pkgs_cache;
 		GenericArray<string> mirrors_countries;
@@ -53,6 +56,7 @@ namespace Pamac {
 			alpm_config = config.alpm_config;
 			context = MainContext.default ();
 			aur_vcs_pkgs = new HashTable<string, AURPackageLinked> (str_hash, str_equal);
+			vcs_checked_versions = new HashTable<string, string> (str_hash, str_equal);
 			pkgs_cache = new HashTable<unowned string, AlpmPackageLinked> (str_hash, str_equal);
 			aur_pkgs_cache = new HashTable<unowned string, AURPackageLinked> (str_hash, str_equal);
 			// get_user_agent defined in utils.vala
@@ -2125,7 +2129,13 @@ namespace Pamac {
 				}
 				if (config.check_aur_updates) {
 					if (config.check_aur_vcs_updates) {
-						refresh_vcs_sources (vcs_local_pkgs, false);
+						last_vcs_refresh_success = refresh_vcs_sources (vcs_local_pkgs, false);
+						if (!last_vcs_refresh_success) {
+							context.invoke (() => {
+								emit_warning ("Some development package sources could not be refreshed; AUR update results may be incomplete");
+								return false;
+							});
+						}
 					}
 					// count this step as 5% of the total
 					context.invoke (() => {
@@ -2168,109 +2178,158 @@ namespace Pamac {
 		}
 
 
-		// Emit progress from the worker thread without writing to the CLI from it.
+		// Report progress from the worker on the main context, not its thread.
 		void report_vcs_refresh_progress (string pkgname, uint current, uint total, string stage) {
 			string package_copy = pkgname;
+			uint position = current;
+			uint count = total;
+			string phase = stage;
 			context.invoke (() => {
-				vcs_refresh_progress (package_copy, current, total, stage);
+				vcs_refresh_progress (package_copy, position, count, phase);
 				return false;
 			});
 		}
 
-		// Complete all development-source checks before the CLI calculates upgrades.
-		// This runs in a worker; normal GUI update checks continue to use the same
-		// refresh implementation without emitting the extra CLI progress events.
-		public async bool refresh_vcs_sources_for_upgrade_async () {
-			if (!config.support_aur || !config.check_aur_updates || !config.check_aur_vcs_updates) {
-				return true;
-			}
-			bool success = false;
+		// Read the version evaluated after makepkg has fetched the sources.
+		// Never read or mutate <builddir>/<pkgbase>/src in a VCS check.
+		bool read_checked_vcs_version (string pkgdir, string pkgname) {
+			var launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_PIPE | SubprocessFlags.STDERR_SILENCE);
+			launcher.set_cwd (pkgdir);
+			GenericArray<string> cmdline = get_dynamic_user_cmdline (pkgdir);
+			cmdline.add ("makepkg");
+			cmdline.add ("--printsrcinfo");
+			cmdline.length = cmdline.length + 1;
 			try {
-				new Thread<int>.try ("refresh_vcs_for_upgrade", () => {
-					lock (alpm_config) {
-						var vcs_local_pkgs = new GenericArray<string> ();
-						unowned Alpm.List<unowned Alpm.Package> pkgcache = alpm_handle.localdb.pkgcache;
-						while (pkgcache != null) {
-							unowned Alpm.Package installed_pkg = pkgcache.data;
-							unowned string name = installed_pkg.name;
-							if (installed_pkg.get_new_version (alpm_handle.syncdbs) == null
-									&& get_syncpkg (alpm_handle, name) == null
-									&& alpm_handle.should_ignore (installed_pkg) == 0
-									&& (name.has_suffix ("-git")
-										|| name.has_suffix ("-svn")
-										|| name.has_suffix ("-bzr")
-										|| name.has_suffix ("-hg"))) {
-								vcs_local_pkgs.add (name);
-							}
-							pkgcache.next ();
+				Subprocess process = launcher.spawnv (cmdline.data);
+				string? output;
+				string? ignored_stderr;
+				process.communicate_utf8 (null, null, out output, out ignored_stderr);
+				if (!process.get_if_exited () || process.get_exit_status () != 0 || output == null) {
+					return false;
+				}
+				string epoch = "";
+				string pkgver = "";
+				string pkgrel = "";
+				bool matched_package = false;
+				foreach (unowned string raw_line in output.split ("\n")) {
+					string line = raw_line.strip ();
+					if (line.has_prefix ("epoch = ")) {
+						epoch = line.substring ("epoch = ".length);
+					} else if (line.has_prefix ("pkgver = ")) {
+						pkgver = line.substring ("pkgver = ".length);
+					} else if (line.has_prefix ("pkgrel = ")) {
+						pkgrel = line.substring ("pkgrel = ".length);
+					} else if (line.has_prefix ("pkgname = ")) {
+						if (line.substring ("pkgname = ".length) == pkgname) {
+							matched_package = true;
 						}
-						success = refresh_vcs_sources (vcs_local_pkgs, true);
 					}
-					context.invoke (refresh_vcs_sources_for_upgrade_async.callback);
-					return 0;
-				});
-				yield;
+				}
+				if (!matched_package || pkgver == "" || pkgrel == "") {
+					return false;
+				}
+				string version = (epoch == "" ? "" : epoch + ":") + pkgver + "-" + pkgrel;
+				vcs_checked_versions.insert (pkgname, version);
+				return true;
 			} catch (Error e) {
-				warning ("VCS refresh failed: %s", e.message);
-				return false;
+				warning ("Failed to read refreshed VCS metadata for %s: %s", pkgname, e.message);
 			}
-			return success;
+			return false;
 		}
 
+		// Shared by both GUI update checks and CLI upgrade selection.
+		// Each invocation uses a unique source workspace, so concurrent checks
+		// cannot change a makepkg source tree used by another Pamac process.
 		bool refresh_vcs_sources (GenericArray<string> vcs_local_pkgs, bool report_progress) {
-			bool success = true;
+			vcs_checked_versions.remove_all ();
+			aur_vcs_pkgs.remove_all ();
 			uint total = vcs_local_pkgs.length;
 			uint current = 0;
-			if (report_progress && total == 0) {
-				report_vcs_refresh_progress ("", 0, 0, "empty");
+			if (total == 0) {
+				if (report_progress) {
+					report_vcs_refresh_progress ("", 0, 0, "empty");
+				}
+				return true;
 			}
+
+			string build_root = get_real_aur_build_dir ();
+			var build_directory = File.new_for_path (build_root);
+			if (!build_directory.query_exists ()) {
+				try {
+					build_directory.make_directory_with_parents ();
+				} catch (Error e) {
+					warning ("Cannot create AUR build directory: %s", e.message);
+					return false;
+				}
+			}
+
+			string workspace = Path.build_filename (build_root, ".vcs-refresh-" + Uuid.string_random ());
+			var setup = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
+			setup.set_cwd (build_root);
+			GenericArray<string> mkdir_cmd = get_dynamic_user_cmdline (build_root);
+			mkdir_cmd.add ("mkdir");
+			mkdir_cmd.add ("-p");
+			mkdir_cmd.add (workspace);
+			if (launch_subprocess (setup, mkdir_cmd) != 0) {
+				warning ("Cannot create isolated VCS refresh workspace %s", workspace);
+				return false;
+			}
+
+			bool success = true;
 			foreach (unowned string pkgname in vcs_local_pkgs) {
 				current++;
 				if (report_progress) {
 					report_vcs_refresh_progress (pkgname, current, total, "start");
 				}
-				// Get the latest AUR build instructions, then refresh VCS sources.
 				AURInfos? aur_infos = aur_plugin.get_infos (pkgname);
 				if (aur_infos == null) {
-					// Locally installed VCS packages do not necessarily exist in AUR.
 					if (report_progress) {
 						report_vcs_refresh_progress (pkgname, current, total, "missing");
 					}
 					continue;
 				}
-				File? clone_dir = clone_build_files (aur_infos.packagebase, false, null);
-				if (clone_dir == null) {
+
+				string pkgdir = Path.build_filename (workspace, pkgname);
+				var git_launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
+				git_launcher.set_cwd (workspace);
+				GenericArray<string> git_cmd = get_dynamic_user_cmdline (workspace);
+				git_cmd.add ("git");
+				git_cmd.add ("clone");
+				git_cmd.add ("-q");
+				git_cmd.add ("--depth=1");
+				git_cmd.add ("https://aur.archlinux.org/%s.git".printf (aur_infos.packagebase));
+				git_cmd.add (pkgdir);
+				if (launch_subprocess (git_launcher, git_cmd) != 0) {
 					success = false;
 					if (report_progress) {
 						report_vcs_refresh_progress (pkgname, current, total, "clone-failed");
 					}
 					continue;
 				}
+
 				if (report_progress) {
 					report_vcs_refresh_progress (pkgname, current, total, "source");
 				}
-				// Avoid verbose child output; report the package and phase instead.
-				var launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
-				string cwd = clone_dir.get_path ();
-				launcher.set_cwd (cwd);
-				GenericArray<string> cmdline = get_dynamic_user_cmdline (cwd);
-				cmdline.add ("makepkg");
-				cmdline.add ("--nobuild");
-				cmdline.add ("--noprepare");
-				cmdline.add ("--nodeps");
-				cmdline.add ("--skipinteg");
-				int status = launch_subprocess (launcher, cmdline);
-				if (status != 0) {
+				var makepkg_launcher = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
+				makepkg_launcher.set_cwd (pkgdir);
+				GenericArray<string> makepkg_cmd = get_dynamic_user_cmdline (pkgdir);
+				makepkg_cmd.add ("makepkg");
+				makepkg_cmd.add ("--nobuild");
+				makepkg_cmd.add ("--noprepare");
+				makepkg_cmd.add ("--nodeps");
+				makepkg_cmd.add ("--skipinteg");
+				if (launch_subprocess (makepkg_launcher, makepkg_cmd) != 0) {
 					success = false;
 					if (report_progress) {
 						report_vcs_refresh_progress (pkgname, current, total, "source-failed");
 					}
 					continue;
 				}
+
 				if (report_progress) {
 					report_vcs_refresh_progress (pkgname, current, total, "metadata");
 				}
-				if (!regenerate_srcinfo (clone_dir.get_basename (), null)) {
+				if (!read_checked_vcs_version (pkgdir, pkgname)) {
 					success = false;
 					if (report_progress) {
 						report_vcs_refresh_progress (pkgname, current, total, "metadata-failed");
@@ -2279,47 +2338,31 @@ namespace Pamac {
 					report_vcs_refresh_progress (pkgname, current, total, "done");
 				}
 			}
+
+			var cleanup = new SubprocessLauncher (SubprocessFlags.STDOUT_SILENCE | SubprocessFlags.STDERR_SILENCE);
+			cleanup.set_cwd (build_root);
+			GenericArray<string> rm_cmd = get_dynamic_user_cmdline (build_root);
+			rm_cmd.add ("rm");
+			rm_cmd.add ("-rf");
+			rm_cmd.add ("--");
+			rm_cmd.add (workspace);
+			if (launch_subprocess (cleanup, rm_cmd) != 0) {
+				warning ("Could not clean isolated VCS refresh workspace %s", workspace);
+				success = false;
+			}
 			return success;
 		}
 
+		// Only versions checked in this invocation may be used to decide upgrades.
 		HashTable<string, string> get_vcs_last_version (GenericArray<string> vcs_local_pkgs) {
-			var pkgnames_table = new HashTable<string, string> (str_hash, str_equal);
-			unowned string real_aur_build_dir = get_real_aur_build_dir ();
+			var versions = new HashTable<string, string> (str_hash, str_equal);
 			foreach (unowned string pkgname in vcs_local_pkgs) {
-				if (aur_vcs_pkgs.contains (pkgname)) {
-					continue;
-				}
-				var pkgdir = File.new_for_path (Path.build_filename (real_aur_build_dir, pkgname));
-				if (pkgdir.query_exists ()) {
-					var srcinfo = pkgdir.get_child (".SRCINFO");
-					try {
-						// read .SRCINFO
-						var dis = new DataInputStream (srcinfo.read ());
-						string? line;
-						var version = new StringBuilder ("");
-						while ((line = dis.read_line ()) != null) {
-							if ("pkgver = " in line) {
-								version.append (line.split (" = ", 2)[1]);
-							} else if ("pkgrel = " in line) {
-								version.append ("-");
-								version.append (line.split (" = ", 2)[1]);
-							} else if ("epoch = " in line) {
-								version.prepend (":");
-								version.prepend (line.split (" = ", 2)[1]);
-							} else if ("pkgname = " in line) {
-								string pkgname_found = line.split (" = ", 2)[1];
-								if (vcs_local_pkgs.find_with_equal_func (pkgname_found, str_equal)) {
-									pkgnames_table.insert ((owned) pkgname_found, version.str);
-								}
-							}
-						}
-					} catch (Error e) {
-						warning (e.message);
-						continue;
-					}
+				unowned string? checked_version = vcs_checked_versions.lookup (pkgname);
+				if (checked_version != null) {
+					versions.insert (pkgname, checked_version);
 				}
 			}
-			return pkgnames_table;
+			return versions;
 		}
 
 		void get_aur_updates_real (GenericArray<unowned AURInfos> aur_infos_list, GenericArray<string> vcs_local_pkgs, ref Updates updates) {
@@ -2408,7 +2451,13 @@ namespace Pamac {
 							}
 							pkgcache.next ();
 						}
-						get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
+						// This is the same source check used by GUI update listings.
+						// Wait for it here, before calculating CLI build candidates.
+						last_vcs_refresh_success = !config.check_aur_vcs_updates ||
+							refresh_vcs_sources (vcs_local_pkgs, true);
+						if (last_vcs_refresh_success) {
+							get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
+						}
 						// remove ignorepkgs
 						foreach (unowned string name in ignorepkgs) {
 							alpm_handle.remove_ignorepkg (name);
