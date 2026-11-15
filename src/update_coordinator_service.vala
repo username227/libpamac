@@ -73,8 +73,8 @@ namespace Pamac {
 				GLib.get_monotonic_time () : 0;
 			worker = null;
 			checking = false;
-			message ("Pamac shared update check %" + uint64.FORMAT +
-				" finished: status %d, %u result lines", id, status, lines.length);
+			message ("Pamac shared update check finished: status %d, %u result lines",
+				status, (uint) lines.length);
 			check_finished ("default", id, status, copy_lines (lines));
 		}
 
@@ -146,7 +146,7 @@ namespace Pamac {
 							}
 						}
 						if (output != null) {
-							foreach (unowned string line in output.split ("\n")) {
+							foreach (string line in output.split ("\n")) {
 								if (line.length != 0) {
 									finished_lines += line;
 								}
