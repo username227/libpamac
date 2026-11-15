@@ -1,29 +1,26 @@
 /*
- * Pamac-Fix shared update coordinator API.
+ * Pamac-Fix shared update coordinator D-Bus API.
  *
- * The per-user session service owns ordinary update discovery. A caller
- * requesting the same profile while a check is already running joins that
- * check; it does not start another VCS source refresh. Build/install
- * transactions still perform their own final validation under flock.
+ * RequestCheck returns immediately. CheckFinished delivers the result when
+ * the single direct-check worker exits. No long-running D-Bus method calls
+ * or extended proxy timeouts are required.
  */
 namespace Pamac {
 	[DBus (name = "org.manjaro.pamac.UpdateCoordinator1")]
 	public interface UpdateCoordinator : Object {
-		// Version 1 currently supports only "default", using /etc/pamac.conf.
-		// Other scopes must never silently share incompatible results.
-		// VCS refreshes can take many minutes; GLib's default D-Bus timeout
-		// is only about 25 seconds. Set a bounded 10-minute method timeout.
-		[DBus (timeout = 600000)]
-		public abstract async void check (string profile, bool force,
-			out int exit_status, out string[] updates) throws IOError;
+		// running=true: join/wait for the check_id's CheckFinished signal.
+		// running=false: status and updates are the completed cached result.
+		// Only the /etc/pamac.conf default profile is currently supported.
+		public abstract void request_check (string profile, bool force,
+			out bool running, out uint64 check_id, out int status,
+			out string[] updates) throws DBusError, IOError;
 
-		// Invalidate after installs or package database changes.
-		public abstract void invalidate () throws IOError;
+		public abstract void invalidate () throws DBusError, IOError;
 
-		public signal void check_started (string profile);
-		public signal void check_progress (string profile, string package_name,
-			uint current, uint total, string phase);
-		public signal void check_finished (string profile, int exit_status,
-			string[] updates);
+		public signal void check_started (string profile, uint64 check_id);
+		public signal void check_progress (string profile, uint64 check_id,
+			string package_name, uint current, uint total, string phase);
+		public signal void check_finished (string profile, uint64 check_id,
+			int status, string[] updates);
 	}
 }
