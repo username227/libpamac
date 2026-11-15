@@ -97,6 +97,36 @@ namespace Pamac {
 			check_finished ("default", id, status, copy_lines (lines));
 		}
 
+		// Read-only clients can reuse a running or recently finished job,
+		// but must never initiate the standalone worker: that worker may
+		// refresh pacman sync/files DBs, unlike native "checkupdates".
+		public void try_join (string profile,
+			out bool available, out bool running, out uint64 check_id,
+			out int status, out string[] updates) throws DBusError, IOError {
+			if (profile != "default") {
+				throw new IOError.NOT_SUPPORTED ("Only the default Pamac profile is supported");
+			}
+			check_id = generation;
+			status = last_status;
+			updates = copy_lines (last_updates);
+			available = false;
+			running = false;
+			if (checking) {
+				available = true;
+				running = !stalled;
+				if (stalled) {
+					status = 103;
+					updates = {};
+				}
+				return;
+			}
+			if (completed_at != 0 &&
+				(last_status == 0 || last_status == 100) &&
+				GLib.get_monotonic_time () - completed_at < 30 * TimeSpan.SECOND) {
+				available = true;
+			}
+		}
+
 		public void request_check (string profile, bool force,
 			out bool running, out uint64 check_id, out int status,
 			out string[] updates) throws DBusError, IOError {
