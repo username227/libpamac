@@ -13,6 +13,8 @@ namespace Pamac {
 	public class UpdateCoordinatorService : Object, UpdateCoordinator {
 		bool checking = false;
 		bool stalled = false;
+		bool transaction_active = false;
+		uint64 current_transaction_id = 0;
 		uint64 generation = 0;
 		uint64 invalidation_epoch = 0;
 		uint64 pending_epoch = 0;
@@ -74,6 +76,9 @@ namespace Pamac {
 		}
 
 		public uint64 begin_external_check () throws DBusError, IOError {
+			if (transaction_active) {
+				return 0;
+			}
 			// A token fences the future result against every package change,
 			// other explicit refresh, or queued post-installation check.
 			invalidation_epoch++;
@@ -83,7 +88,7 @@ namespace Pamac {
 
 		public bool publish_external_check (uint64 epoch,
 			string[] updates, string[] repo_aur_updates) throws DBusError, IOError {
-			if (epoch == 0 || epoch != invalidation_epoch) {
+			if (transaction_active || epoch == 0 || epoch != invalidation_epoch) {
 				return false;
 			}
 			// Reject malformed/empty entries and ensure the repo/AUR profile
@@ -124,7 +129,55 @@ namespace Pamac {
 			return true;
 		}
 
+		// This is a state signal, not an update check. Invalidate any prior
+		// snapshot but retain the tray's last-known icon/count while packages
+		// are being prepared, downloaded, built and installed.
+		public uint64 begin_transaction () throws DBusError, IOError {
+			current_transaction_id++;
+			transaction_active = true;
+			recheck_queued = false;
+			invalidation_epoch++;
+			completed_at = 0;
+			transaction_started ();
+			return current_transaction_id;
+		}
+
+		public void finish_transaction (uint64 transaction_id,
+			bool success, bool full_default_upgrade) throws DBusError, IOError {
+			if (!transaction_active || transaction_id == 0 ||
+				transaction_id != current_transaction_id) {
+				return;
+			}
+			transaction_active = false;
+			invalidation_epoch++;
+			completed_at = 0;
+			recheck_queued = false;
+			bool verified_complete = success && full_default_upgrade;
+			transaction_finished (success, verified_complete);
+			if (verified_complete) {
+				// A complete default-profile sysupgrade just checked and
+				// applied its selected repo/AUR/Flatpak upgrades. Reuse that
+				// outcome directly instead of starting another VCS scan.
+				generation++;
+				last_status = 0;
+				last_updates = {};
+				last_repo_aur_updates = {};
+				completed_at = GLib.get_monotonic_time ();
+				check_finished ("default", generation, 0, {});
+				check_finished ("repo-aur", generation, 0, {});
+			} else {
+				// A partial/custom/failed operation cannot prove zero updates.
+				// Preserve the last-known icon; invalidate reuse of its cache.
+				last_status = 103;
+			}
+		}
+
+		// Explicit callers may still request a new check, but transaction
+		// completion itself must never invoke this secondary worker.
 		public void recheck_after_transaction () throws DBusError, IOError {
+			if (transaction_active) {
+				return;
+			}
 			invalidate ();
 			if (checking) {
 				// A transaction can finish while another worker still owns the
@@ -154,6 +207,14 @@ namespace Pamac {
 			if (watchdog_source != 0) {
 				Source.remove (watchdog_source);
 				watchdog_source = 0;
+			}
+			if (transaction_active) {
+				// A pre-existing worker has been superseded by an ongoing
+				// package operation. Never overwrite its visible progress.
+				worker = null;
+				checking = false;
+				stalled = false;
+				return;
 			}
 			if (pending_epoch != invalidation_epoch) {
 				if (completed_at != 0 &&
@@ -228,6 +289,14 @@ namespace Pamac {
 				last_repo_aur_updates : last_updates);
 			available = false;
 			running = false;
+			if (transaction_active) {
+				// Reject concurrent read-only checks rather than racing the
+				// transaction with another VCS/source inspection.
+				available = true;
+				status = 103;
+				updates = {};
+				return;
+			}
 			if (has_newer_published_snapshot ()) {
 				// An older worker is still exiting, but a newer GTK/CLI
 				// snapshot has already been verified and broadcast.
@@ -259,6 +328,12 @@ namespace Pamac {
 			check_id = generation;
 			status = last_status;
 			updates = copy_lines (last_updates);
+			if (transaction_active) {
+				running = false;
+				status = 103;
+				updates = {};
+				return;
+			}
 			if (!force && has_newer_published_snapshot ()) {
 				running = false;
 				return;
