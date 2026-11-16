@@ -560,11 +560,9 @@ namespace Pamac {
 									unowned string child_filename = child_info.get_name ();
 									if (child_filename == "PKGBUILD") {
 										// check pkgnames of srcinfo to targets
-										bool success = filename in refreshed_srcinfo_bases ||
-												database.regenerate_srcinfo (filename, build_cancellable, true);
-										if (success) {
-											refreshed_srcinfo_bases.add (filename);
-										}
+										// Keep directory scanning inexpensive. The selected
+										// source base is regenerated unconditionally below.
+										bool success = database.regenerate_srcinfo (filename, build_cancellable);
 										if (success) {
 											var srcinfo = child_file.get_child (".SRCINFO");
 											// read .SRCINFO
