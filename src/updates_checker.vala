@@ -33,6 +33,9 @@ namespace Pamac {
 		public bool no_update_hide_icon { get { return config.no_update_hide_icon; } }
 
 		public signal void updates_available (uint16 updates_nb);
+		// A new coordinated scan has started; keep the known icon but
+		// make the tray react immediately rather than appearing idle.
+		public signal void updates_checking ();
 		// A partial check must not clear last-known updates.
 		// 'deferred' means an active Pamac build prevented VCS inspection.
 		public signal void updates_incomplete (bool deferred);
@@ -59,8 +62,24 @@ namespace Pamac {
 				coordinator = Bus.get_proxy_sync (BusType.SESSION,
 					"org.manjaro.pamac.UpdateCoordinator1",
 					"/org/manjaro/pamac/UpdateCoordinator1");
-				coordinator.check_finished.connect ((profile, check_id, status, lines) => {
+				coordinator.check_started.connect ((profile, check_id) => {
 					if (profile == "default") {
+						if (check_lock_timeout_id != 0) {
+							Source.remove (check_lock_timeout_id);
+							check_lock_timeout_id = 0;
+						}
+						updates_checking ();
+					}
+				});
+			coordinator.check_finished.connect ((profile, check_id, status, lines) => {
+					if (profile == "default") {
+						// A successful coordinated result supersedes the old
+						// 5-second lock-release retry; avoid duplicate VCS work.
+						if ((status == 0 || status == 100) &&
+							check_lock_timeout_id != 0) {
+							Source.remove (check_lock_timeout_id);
+							check_lock_timeout_id = 0;
+						}
 						apply_shared_result (status, lines);
 					}
 				});
@@ -162,6 +181,7 @@ namespace Pamac {
 			if (event_type == FileMonitorEvent.CREATED) {
 				if (check_lock_timeout_id != 0) {
 					Source.remove (check_lock_timeout_id);
+					check_lock_timeout_id = 0;
 				}
 			}
 			if (event_type == FileMonitorEvent.DELETED) {
