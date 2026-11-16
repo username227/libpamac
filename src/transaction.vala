@@ -483,9 +483,9 @@ namespace Pamac {
 					to_get_from_aur.add (pkgname);
 				}
 			}
-			HashTable<string, unowned AURPackage?> aur_pkgs = null;
+			HashTable<string, AURPackageLinked> aur_pkgs = null;
 			if (to_get_from_aur.length > 0) {
-				aur_pkgs = yield database.get_aur_pkgs_async (to_get_from_aur);
+				aur_pkgs = yield database.get_fresh_aur_pkgs_async (to_get_from_aur);
 			}
 			unowned string real_aur_build_dir = database.get_real_aur_build_dir ();
 			foreach (unowned string pkgname in pkgnames) {

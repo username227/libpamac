@@ -1986,12 +1986,13 @@ namespace Pamac {
 			lock (alpm_config) {
 				foreach (unowned AURInfos aur_infos in aur_infos_list) {
 					unowned string name = aur_infos.name;
-					// Use the current RPC metadata, not lazy fields cached from
-					// an earlier revision of this AUR package.
-					unowned Alpm.Package? local_pkg = alpm_handle.localdb.get_pkg (name);
-					var pkg = new AURPackageLinked ();
-					pkg.initialise_from_aur_infos (aur_infos, local_pkg, this);
-					aur_pkgs_cache.replace (pkg.id, pkg);
+					AURPackageLinked pkg = aur_pkgs_cache.lookup (name);
+					if (pkg == null) {
+						unowned Alpm.Package? local_pkg = alpm_handle.localdb.get_pkg (name);
+						pkg = new AURPackageLinked ();
+						pkg.initialise_from_aur_infos (aur_infos, local_pkg, this);
+						aur_pkgs_cache.replace (pkg.id, pkg);
+					}
 					data.insert (name, pkg);
 				}
 			}
@@ -2015,6 +2016,36 @@ namespace Pamac {
 				new Thread<int>.try ("get_aur_pkgs", () => {
 					get_aur_pkgs_real (pkgnames, ref data);
 					context.invoke (get_aur_pkgs_async.callback);
+					return 0;
+				});
+				yield;
+			} catch (Error e) {
+				warning (e.message);
+			}
+			return data;
+		}
+
+		// Fresh, privately owned AUR objects for one dependency-planning pass.
+		// Do not replace aur_pkgs_cache entries: GTK callers may still hold
+		// unowned references to those shared cached package objects.
+		internal async HashTable<string, AURPackageLinked> get_fresh_aur_pkgs_async (GenericArray<string> pkgnames) {
+			var data = new HashTable<string, AURPackageLinked> (str_hash, str_equal);
+			if (!config.enable_aur) {
+				return data;
+			}
+			try {
+				new Thread<int>.try ("get_fresh_aur_pkgs", () => {
+					var aur_infos_list = aur_plugin.get_multi_infos (pkgnames);
+					lock (alpm_config) {
+						foreach (unowned AURInfos aur_infos in aur_infos_list) {
+							unowned string name = aur_infos.name;
+							unowned Alpm.Package? local_pkg = alpm_handle.localdb.get_pkg (name);
+							var pkg = new AURPackageLinked ();
+							pkg.initialise_from_aur_infos (aur_infos, local_pkg, this);
+							data.insert (name, pkg);
+						}
+					}
+					context.invoke (get_fresh_aur_pkgs_async.callback);
 					return 0;
 				});
 				yield;
