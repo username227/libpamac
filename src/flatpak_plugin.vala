@@ -825,11 +825,22 @@ namespace Pamac {
 					transaction.add_update (name, null, null);
 				}
 				if (to_upgrade.length > 0) {
-					// add runtime updates
+					// Include runtime dependencies, but never add a runtime twice
+					// when the caller already selected it from the update list.
 					GenericArray<unowned Flatpak.InstalledRef> update_apps = installation.list_installed_refs_for_update ();
 					foreach (unowned Flatpak.InstalledRef installed_ref in update_apps) {
 						if (installed_ref.kind == Flatpak.RefKind.RUNTIME) {
-							transaction.add_update (installed_ref.format_ref (), null, null);
+							string runtime_ref = installed_ref.format_ref ();
+							bool already_queued = false;
+							foreach (unowned string id in to_upgrade) {
+								if (id.split ("/", 2)[1] == runtime_ref) {
+									already_queued = true;
+									break;
+								}
+							}
+							if (!already_queued) {
+								transaction.add_update (runtime_ref, null, null);
+							}
 						}
 					}
 				}
