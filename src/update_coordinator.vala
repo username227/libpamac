@@ -21,6 +21,17 @@ namespace Pamac {
 			out bool available, out bool running, out uint64 check_id,
 			out int status, out string[] updates) throws DBusError, IOError;
 
+		// Fence independent GTK/CLI read-only checks against intervening
+		// transactions and other checks before publishing an authoritative
+		// default-profile snapshot to all listeners (including the tray).
+		public abstract uint64 begin_external_check () throws DBusError, IOError;
+		public abstract bool publish_external_check (uint64 epoch,
+			string[] updates, string[] repo_aur_updates) throws DBusError, IOError;
+
+		// After a package-changing operation, invalidate and launch (or queue)
+		// one fresh shared check. Never keep an old tray state indefinitely.
+		public abstract void recheck_after_transaction () throws DBusError, IOError;
+
 		public abstract void invalidate () throws DBusError, IOError;
 
 		public signal void check_started (string profile, uint64 check_id);
