@@ -2668,11 +2668,22 @@ namespace Pamac {
 						// AUR build lock, from selection through build/install.
 						last_vcs_scan_reused = config.check_aur_vcs_updates &&
 							reuse_recent_vcs_sources && can_reuse_vcs_snapshot ();
+						// GTK gets explicit status even when a prior source
+						// refresh is reused (no per-package scan events exist).
+						// CLI doesn't opt in and keeps its existing output.
+						if (reuse_recent_vcs_sources && config.check_aur_vcs_updates) {
+							report_vcs_refresh_progress ("", 0, vcs_local_pkgs.length,
+								last_vcs_scan_reused ? "reuse" : "rescan");
+						}
 						aur_vcs_pkgs.remove_all ();
 						last_vcs_refresh_success = !config.check_aur_vcs_updates ||
 							last_vcs_scan_reused ||
 							refresh_vcs_sources (vcs_local_pkgs, true);
 						if (last_vcs_refresh_success) {
+							if (reuse_recent_vcs_sources && config.check_aur_vcs_updates) {
+								report_vcs_refresh_progress ("", 0, vcs_local_pkgs.length,
+									"aur-info");
+							}
 							get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
 						}
 						// remove ignorepkgs
