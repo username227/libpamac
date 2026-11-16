@@ -173,7 +173,8 @@
 		// deferred. Exit 102: source check failed and the list is incomplete.
 		// Neither may be interpreted by the tray as "no updates available".
 		int partial_status = database.vcs_updates_deferred ? 101 :
-			(!database.last_vcs_refresh_success ? 102 : 0);
+			(!database.last_vcs_refresh_success ? 102 :
+			(!database.last_flatpak_updates_success ? 103 : 0));
 		uint updates_nb = updates.repos_updates.length + updates.aur_updates.length + updates.flatpak_updates.length;
 		if (updates_nb == 0) {
 			return partial_status;
