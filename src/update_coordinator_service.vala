@@ -142,6 +142,11 @@ namespace Pamac {
 
 		private void finish_check (uint64 id, int status, string[] lines,
 			string[] repo_aur_lines) {
+			// Incoming array parameters are unowned in Vala. Use owned
+			// local snapshots so an externally published result can safely
+			// replace an older worker's result before broadcasting it.
+			string[] final_lines = copy_lines (lines);
+			string[] final_repo_aur_lines = copy_lines (repo_aur_lines);
 			if (!checking || id != generation) {
 				// A late callback from a worker already failed or was stopped.
 				return;
@@ -156,26 +161,26 @@ namespace Pamac {
 					// An external GTK/CLI check published a newer complete
 					// snapshot. Do not let an older worker overwrite it.
 					status = last_status;
-					lines = copy_lines (last_updates);
-					repo_aur_lines = copy_lines (last_repo_aur_updates);
+					final_lines = copy_lines (last_updates);
+					final_repo_aur_lines = copy_lines (last_repo_aur_updates);
 				} else if (status == 0 || status == 100) {
 					message ("Pamac check result incomplete: state invalidated during check");
 					status = 103;
 				}
 			}
 			last_status = status;
-			last_updates = copy_lines (lines);
-			last_repo_aur_updates = copy_lines (repo_aur_lines);
+			last_updates = copy_lines (final_lines);
+			last_repo_aur_updates = copy_lines (final_repo_aur_lines);
 			completed_at = (status == 0 || status == 100) ?
 				GLib.get_monotonic_time () : 0;
 			worker = null;
 			checking = false;
 			stalled = false;
 			message ("Pamac shared update check finished: status %d, %u result lines",
-				status, (uint) lines.length);
-			check_finished ("default", id, status, copy_lines (lines));
+				status, (uint) final_lines.length);
+			check_finished ("default", id, status, copy_lines (final_lines));
 			check_finished ("repo-aur", id,
-				repo_aur_status (status, repo_aur_lines), copy_lines (repo_aur_lines));
+				repo_aur_status (status, final_repo_aur_lines), copy_lines (final_repo_aur_lines));
 			if (recheck_queued) {
 				recheck_queued = false;
 				Idle.add (() => {
