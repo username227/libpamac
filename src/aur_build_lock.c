@@ -6,8 +6,8 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-int
-pamac_aur_lock_fd_try (const char *path)
+static int
+pamac_aur_lock_fd_try_mode (const char *path, int operation)
 {
     int fd = open (path, O_CREAT | O_RDWR | O_CLOEXEC | O_NOFOLLOW, 0600);
     if (fd < 0)
@@ -20,7 +20,7 @@ pamac_aur_lock_fd_try (const char *path)
         return -1;
     }
 
-    if (flock (fd, LOCK_EX | LOCK_NB) == 0)
+    if (flock (fd, operation | LOCK_NB) == 0)
         return fd;
 
     int saved_errno = errno;
@@ -28,6 +28,18 @@ pamac_aur_lock_fd_try (const char *path)
     if (saved_errno == EWOULDBLOCK || saved_errno == EAGAIN)
         return -2;
     return -1;
+}
+
+int
+pamac_aur_lock_fd_try (const char *path)
+{
+    return pamac_aur_lock_fd_try_mode (path, LOCK_EX);
+}
+
+int
+pamac_aur_lock_fd_try_shared (const char *path)
+{
+    return pamac_aur_lock_fd_try_mode (path, LOCK_SH);
 }
 
 void
