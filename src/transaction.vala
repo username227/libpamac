@@ -65,6 +65,11 @@ namespace Pamac {
 		public bool install_as_dep { get; set; }
 		public bool install_as_explicit { get; set; }
 		public bool no_refresh { get; set; }
+		// Only GTK opts into reuse; CLI transactions remain independent.
+		public bool reuse_recent_vcs_sources { get; set; }
+		// Once a package-manager commit starts, the old update list must be
+		// treated as potentially stale even if the operation later fails.
+		public bool package_state_may_have_changed { get; private set; }
 
 		public signal void emit_action (string action);
 		public signal void emit_action_progress (string action, string status, double progress);
@@ -1093,6 +1098,7 @@ namespace Pamac {
 			}
 			bool success = true;
 			verify_after_aur_build = false;
+			package_state_may_have_changed = false;
 			if (sysupgrading ||
 				to_install.length > 0 ||
 				to_remove.length > 0 ||
@@ -1132,6 +1138,7 @@ namespace Pamac {
 					if (success) {
 						if (snap_to_install.length > 0 ||
 							snap_to_remove.length > 0) {
+							package_state_may_have_changed = true;
 							success = yield run_snap_transaction ();
 						}
 					}
@@ -1139,6 +1146,7 @@ namespace Pamac {
 						if (flatpak_to_install.length > 0 ||
 							flatpak_to_remove.length > 0 ||
 							flatpak_to_upgrade.length > 0) {
+							package_state_may_have_changed = true;
 							success = yield run_flatpak_transaction ();
 						}
 					}
@@ -1247,6 +1255,7 @@ namespace Pamac {
 					if (success) {
 						if (snap_to_install.length > 0 ||
 							snap_to_remove.length > 0) {
+							package_state_may_have_changed = true;
 							success = yield run_snap_transaction ();
 						}
 					}
@@ -1254,6 +1263,7 @@ namespace Pamac {
 						if (flatpak_to_install.length > 0 ||
 							flatpak_to_remove.length > 0 ||
 							flatpak_to_upgrade.length > 0) {
+							package_state_may_have_changed = true;
 							success = yield run_flatpak_transaction ();
 						}
 					}
@@ -1355,7 +1365,11 @@ namespace Pamac {
 					if (config.check_aur_vcs_updates) {
 						emit_action (dgettext (null, "Checking development package sources") + "...");
 					}
-					var updates = yield database.get_aur_updates_async (ignorepkgs);
+					var updates = yield database.get_aur_updates_async (
+						ignorepkgs, reuse_recent_vcs_sources);
+					if (database.last_vcs_scan_reused) {
+						emit_action (dgettext (null, "Reused recently checked development package sources") + ".");
+					}
 					if (!database.last_vcs_refresh_success) {
 						var details = new GenericArray<string> (1);
 						details.add (dgettext (null, "One or more VCS sources could not be refreshed; upgrade cancelled to avoid stale build information"));
@@ -1722,6 +1736,7 @@ namespace Pamac {
 						return false;
 					}
 					try {
+						package_state_may_have_changed = true;
 						success = yield transaction_interface.trans_run (sysupgrading,
 																	config.enable_downgrade,
 																	config.simple_install,
@@ -2222,6 +2237,7 @@ namespace Pamac {
 			bool success = false;
 			try {
 				emit_script_output ("");
+				package_state_may_have_changed = true;
 				success = yield transaction_interface.trans_run (false, // sysupgrading,
 															false, // enable_downgrade
 															false, // simple_install
