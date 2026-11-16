@@ -533,6 +533,7 @@ namespace Pamac {
 							details.add (dgettext (null, "Failed to clone %s build files").printf (aur_pkg.packagebase));
 							emit_error (dgettext (null, "Failed to prepare transaction"), details);
 							return false;
+						}
 						// Refresh from PKGBUILD in the common preflight path below.
 					} else {
 						clone_files.add (aur_pkg.packagebase);
