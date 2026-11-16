@@ -134,7 +134,7 @@ until tested.
 9. Verify subsequent completed checks can drive the tray without a
    second VCS refresh. Test owner disappearance and headless fallback.
 
-## New GTK and full CLI verification (not yet performed)
+## New GTK and full CLI verification (test checklist; see runtime ledger below)
 
 **Build sequence matters:** install feature `libpamac` with its new D-Bus
 `TryJoin` API and public `Database` methods before compiling feature
@@ -182,7 +182,7 @@ No integration merges or production releases are authorized.
    notifications. `pamac upgrade` still makes fresh transaction-time
    decisions; use dry-run/controlled environments rather than real upgrade.
 
-### GTK contention regression (pending new local build)
+### GTK contention regression (controlled-lock test passed; transaction prompt test still recommended)
 
 The GTK Updates view must display **no partial or stale update list**
 while another Pamac transaction owns the AUR build lock, including while
@@ -201,6 +201,62 @@ automatic refresh and enabled update actions only after completion.
 Also test while `pamac upgrade` waits for [y/N], then finish or
 cancel and check automatic recovery. Ensure a hard source error
 (still status 102/103) is not misreported as success.
+
+## Runtime verification ledger — 2026-11-15
+
+These are results observed during local testing, not a blanket proof of all
+possible update profiles or failure paths.
+
+- The three feature packages compiled/installed on the user's Arch host,
+  including the Vala fix for the full CLI's communicate_utf8 signature.
+- Concurrent standalone pamac-checkupdates requests used one categorized
+  coordinator worker. The 30-second reuse cache was observed.
+- With EnableFlatpak configured and ordinary repository/AUR updates present,
+  default, filtered repo-aur, and full CLI results matched, with native
+  versions validated. A synthetic or real **Flatpak-only** update case remains
+  untested.
+- A cached CLI join was traced: it spawned the join-only bridge, without a
+  redundant Git, makepkg, or direct VCS worker.
+- With an externally held AUR build flock, GTK displayed an inline waiting
+  state without partial update lists or modal warnings. Releasing the flock
+  automatically initiated a complete native VCS refresh, visibly progressed,
+  and displayed a full "up to date" result.
+- GTK explicit Refresh completed a native full check and reported up to date;
+  an observed join-only 104 was consistent with invalidation but occurred
+  too late to distinguish it from normal 30-second cache expiry. Immediate
+  tray synchronization after native GTK/CLI completion remains **out of
+  scope**, tracked for follow-up work.
+- GTK joined a running coordinator and completed at ~95% after its worker
+  exited 0. When the full CLI joined simultaneously, an original contention
+  race caused GTK to run another VCS refresh after the worker completed.
+- The last race was addressed by shared (LOCK_SH) AUR flock acquisition for
+  typed metadata-only readers; source refreshes and actual builds still
+  require LOCK_EX. With the patched libpamac installed, the same three-client
+  scenario showed GTK proceed directly to 95% and up to date **without**
+  an additional individual-package VCS refresh. All three terminal/GUI
+  clients completed successfully during observed runs.
+- A process snapshot during three-client concurrency showed exactly one
+  /usr/bin/pamac-checkupdates --direct --categorized subprocess, plus
+  one default join-only GTK client and one repo-aur CLI join-only client.
+- Two real-world iptvnator-git builds succeeded, adding transaction
+  regression evidence (not a substitute for exhaustive concurrency tests).
+
+Remaining before feature promotion:
+
+1. Verify an explicit Invalidate() immediately removes a *fresh* coordinator
+   result (separate from 30-second TTL expiration).
+2. Recheck exclusive AUR lock contention under the new LOCK_SH reader change:
+   a true writer must still block metadata readers, and incomplete status
+   must never appear as "up to date".
+3. Review the final branch commits, perform clean integrated builds and
+   installations after fast-forwarding each integration branch.
+4. Where practical, exercise Flatpak-only filtering and local package DB
+   invalidation without artificially changing real installed package state.
+   Those two cases should be documented as untested if no safe fixture is
+   available; do not claim full coverage.
+5. Do not kill a coordinator while its VCS worker is active merely to test
+   restarts; parent/child lifecycle failure injection needs controlled
+   fixtures and should not jeopardize the user's AUR build environment.
 
 ## Not part of this checkpoint
 
