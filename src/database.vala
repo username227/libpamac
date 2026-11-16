@@ -2092,14 +2092,24 @@ namespace Pamac {
 		// transactions additionally own the exclusive AUR build lock.
 		string vcs_source_stamp () {
 			var state = new StringBuilder (get_real_aur_build_dir ());
-			var installed = alpm_handle.localdb.pkgcache;
+			state.append (config.db_path);
+			state.append (config.check_aur_updates ? "aur-on" : "aur-off");
+			state.append (config.check_aur_vcs_updates ? "vcs-on" : "vcs-off");
+			foreach (unowned string ignored in config.ignorepkgs) {
+				state.append (ignored);
+				state.append ("\n");
+			}
+			unowned Alpm.List<unowned Alpm.Package> installed = alpm_handle.localdb.pkgcache;
 			while (installed != null) {
 				unowned Alpm.Package pkg = installed.data;
 				state.append (pkg.name);
+				state.append ("=");
 				state.append (pkg.version);
+				state.append ("\n");
 				if (pkg.name.has_suffix ("-git") || pkg.name.has_suffix ("-svn") ||
 					pkg.name.has_suffix ("-hg") || pkg.name.has_suffix ("-bzr")) {
-					foreach (unowned string filename in {".SRCINFO", "PKGBUILD"}) {
+					string[] metadata_files = {".SRCINFO", "PKGBUILD"};
+					foreach (unowned string filename in metadata_files) {
 						string pathname = Path.build_filename (
 							get_real_aur_build_dir (), pkg.name, filename);
 						try {
@@ -2107,6 +2117,9 @@ namespace Pamac {
 							FileUtils.get_contents (pathname, out contents);
 							state.append (Checksum.compute_for_string (ChecksumType.SHA256, contents));
 						} catch (FileError e) {
+							if (e.code != FileError.NOENT) {
+								return "";
+							}
 							state.append ("missing:");
 							state.append (filename);
 						}
