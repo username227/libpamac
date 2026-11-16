@@ -2138,7 +2138,10 @@ namespace Pamac {
 					AurBuildLock? source_lock = null;
 					if (config.check_aur_vcs_updates && vcs_local_pkgs.length > 0) {
 						source_lock = new AurBuildLock (get_real_aur_build_dir ());
-						int lock_status = source_lock.try_acquire ();
+						// Metadata-only typed readers use LOCK_SH concurrently.
+						// Transactions and source refreshes retain LOCK_EX.
+						int lock_status = refresh_vcs ? source_lock.try_acquire () :
+							source_lock.try_acquire_shared ();
 						if (lock_status == 1) {
 							// Lock protects both source updates and version reads.
 							// Shared clients must NEVER repeat makepkg -o or clone.
