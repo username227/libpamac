@@ -28,6 +28,10 @@ namespace Pamac {
 		public Alpm.Handle? alpm_handle;
 		uint8 commit_retries;
 		string current_status;
+		// Package-operation events are guaranteed even when libalpm skips progress callbacks.
+		uint package_operations_total;
+		uint package_operations_completed;
+		string package_operation_action;
 		bool sysupgrade;
 		bool enable_downgrade;
 		bool simple_install;
@@ -110,6 +114,9 @@ namespace Pamac {
 			current_filename = "";
 			current_action = "";
 			current_status = "";
+			package_operations_total = 0;
+			package_operations_completed = 0;
+			package_operation_action = "";
 			rate_timer = new Timer ();
 			download_rates = new Queue<double?> ();
 			cancellable = new Cancellable ();
@@ -1112,6 +1119,21 @@ namespace Pamac {
 			if (success) {
 				if (alpm_handle.trans_to_add () != null ||
 					alpm_handle.trans_to_remove () != null) {
+					// Count all actual ALPM operations so even a fast package with no
+					// progress callback gets its own completed [n/total] line.
+					package_operations_total = 0;
+					package_operations_completed = 0;
+					package_operation_action = "";
+					unowned Alpm.List<unowned Alpm.Package> operation_pkgs = alpm_handle.trans_to_add ();
+					while (operation_pkgs != null) {
+						package_operations_total++;
+						operation_pkgs.next ();
+					}
+					operation_pkgs = alpm_handle.trans_to_remove ();
+					while (operation_pkgs != null) {
+						package_operations_total++;
+						operation_pkgs.next ();
+					}
 					// add callbacks to have commit signals
 					alpm_handle.set_eventcb (cb_event, this);
 					alpm_handle.set_progresscb (cb_progress, this);
@@ -2221,6 +2243,20 @@ namespace Pamac {
 							current_filename = details[0];
 							current_action = dgettext (null, "Removing %s").printf ("%s (%s)".printf (details[0], details[1])) + "...";
 							break;
+					}
+					package_operation_action = current_action;
+					break;
+				case 12: //Alpm.Event.Type.PACKAGE_OPERATION_DONE
+					if (package_operations_completed < package_operations_total &&
+						package_operation_action != "") {
+						package_operations_completed++;
+						string completed_status = "%u/%u".printf (package_operations_completed, package_operations_total);
+						double completed_progress = (double) package_operations_completed / package_operations_total;
+						current_status = completed_status;
+						current_progress = completed_progress;
+						// Do not rely solely on progresscb: small/fast packages can
+						// complete without another progress callback.
+						do_emit_action_progress (package_operation_action, completed_status, completed_progress);
 					}
 					break;
 				case 13: //Alpm.Event.Type.INTEGRITY_START
