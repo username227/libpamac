@@ -2629,6 +2629,7 @@ namespace Pamac {
 
 		internal async Updates get_aur_updates_async (
 			GenericSet<string?> ignorepkgs, bool reuse_recent_vcs_sources = false) {
+			last_vcs_scan_reused = false;
 			var updates = new Updates ();
 			try {
 				new Thread<int>.try ("get_aur_updates", () => {
