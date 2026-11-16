@@ -24,6 +24,8 @@ namespace Pamac {
 		Alpm.Handle? files_handle;
 		HashTable<string, AURPackageLinked> aur_vcs_pkgs;
 		public bool last_vcs_refresh_success { get; private set; }
+		// A failed Flatpak lookup must never be reported as zero updates.
+		public bool last_flatpak_updates_success { get; private set; }
 		// True when a GUI/background update query intentionally omitted VCS
 		// packages because another Pamac transaction owns the build lock.
 		public bool vcs_updates_deferred { get; private set; }
@@ -58,6 +60,7 @@ namespace Pamac {
 			context = MainContext.default ();
 			aur_vcs_pkgs = new HashTable<string, AURPackageLinked> (str_hash, str_equal);
 			last_vcs_refresh_success = true;
+			last_flatpak_updates_success = true;
 			vcs_updates_deferred = false;
 			pkgs_cache = new HashTable<unowned string, AlpmPackageLinked> (str_hash, str_equal);
 			aur_pkgs_cache = new HashTable<unowned string, AURPackageLinked> (str_hash, str_equal);
@@ -2131,8 +2134,9 @@ namespace Pamac {
 					pkgcache.next ();
 				}
 				GenericArray<FlatpakPackage> flatpak_updates = updates.flatpak_updates;
-				if (config.check_flatpak_updates) {
-					flatpak_plugin.get_flatpak_updates (ref flatpak_updates);
+				last_flatpak_updates_success = !config.check_flatpak_updates;
+				if (config.check_flatpak_updates && config.enable_flatpak) {
+					last_flatpak_updates_success = flatpak_plugin.get_flatpak_updates (ref flatpak_updates);
 				}
 				if (config.check_aur_updates) {
 					AurBuildLock? source_lock = null;
@@ -2280,6 +2284,27 @@ namespace Pamac {
 		}
 
 
+		// Flatpak-only discovery for the CLI sysupgrade's final stage.
+		// Unlike get_updates_async, this never queries AUR or refreshes VCS.
+		// The boolean result distinguishes an empty list from a failed lookup.
+		public async bool collect_flatpak_updates_async (GenericArray<FlatpakPackage> pkgs) {
+			if (!config.enable_flatpak || !config.check_flatpak_updates) {
+				return false;
+			}
+			bool success = false;
+			try {
+				new Thread<int>.try ("get_flatpak_updates_only", () => {
+					success = flatpak_plugin.get_flatpak_updates (ref pkgs);
+					context.invoke (collect_flatpak_updates_async.callback);
+					return 0;
+				});
+				yield;
+			} catch (Error e) {
+				warning ("Unable to start Flatpak update discovery: %s", e.message);
+			}
+			return success;
+		}
+
 		// Consistent, category-aware lines for direct-check publication.
 		// Keep this identical to pamac-checkupdates' visible format, so
 		// GTK and CLI can publish a complete typed snapshot without rerunning
@@ -2324,7 +2349,8 @@ namespace Pamac {
 		// transactions from silently showing the wrong version in the GUI
 		// or full CLI. Do not compare ignored/out-of-date lists: the
 		// standalone checker deliberately doesn't output those entries.
-		public static bool updates_match_shared_output (Updates updates, string output) {
+		public static bool updates_match_shared_output (Updates updates, string output,
+			bool repo_aur_only = false) {
 			string[] shared_lines = {};
 			if (output.strip () != "") {
 				foreach (string line in output.strip ().split ("\n")) {
@@ -2336,7 +2362,8 @@ namespace Pamac {
 			string[] local_lines;
 			string[] repo_aur_lines;
 			format_shared_update_lines (updates, out local_lines, out repo_aur_lines);
-			if (shared_lines.length != local_lines.length) {
+			string[] expected_lines = repo_aur_only ? repo_aur_lines : local_lines;
+			if (shared_lines.length != expected_lines.length) {
 				return false;
 			}
 			// Package names are unique within one update snapshot. Order
@@ -2344,7 +2371,7 @@ namespace Pamac {
 			// complete formatted lines without relying on array ordering.
 			foreach (unowned string expected in shared_lines) {
 				bool match_found = false;
-				foreach (unowned string found in local_lines) {
+				foreach (unowned string found in expected_lines) {
 					if (expected == found) {
 						match_found = true;
 						break;
