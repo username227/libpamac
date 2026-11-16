@@ -2117,7 +2117,7 @@ namespace Pamac {
 							FileUtils.get_contents (pathname, out contents);
 							state.append (Checksum.compute_for_string (ChecksumType.SHA256, contents));
 						} catch (FileError e) {
-							if (e.code != FileError.NOENT) {
+							if (!(e is FileError.NOENT)) {
 								return "";
 							}
 							state.append ("missing:");
