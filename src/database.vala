@@ -2286,8 +2286,10 @@ namespace Pamac {
 		// VCS checks or guessing categories from display text.
 		public static void format_shared_update_lines (Updates updates,
 			out string[] all_lines, out string[] repo_aur_lines) {
-			all_lines = {};
-			repo_aur_lines = {};
+			// Vala forbids array concatenation on public out parameters.
+			// Accumulate locally, then transfer the completed snapshots.
+			string[] formatted_all = {};
+			string[] formatted_repo_aur = {};
 			foreach (unowned AlpmPackage pkg in updates.repos_updates) {
 				string line;
 				if (pkg.installed_version != null) {
@@ -2295,23 +2297,25 @@ namespace Pamac {
 				} else {
 					line = "%s  %s".printf (pkg.name, pkg.version);
 				}
-				all_lines += line;
-				repo_aur_lines += line;
+				formatted_all += line;
+				formatted_repo_aur += line;
 			}
 			foreach (unowned AURPackage pkg in updates.aur_updates) {
 				string line = "%s  %s -> %s".printf (
 					pkg.name, pkg.installed_version, pkg.version);
-				all_lines += line;
-				repo_aur_lines += line;
+				formatted_all += line;
+				formatted_repo_aur += line;
 			}
 			foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
 				unowned string? app_name = pkg.app_name;
 				if (app_name == null) {
-					all_lines += "%s  %s".printf (pkg.name, pkg.version);
+					formatted_all += "%s  %s".printf (pkg.name, pkg.version);
 				} else {
-					all_lines += "%s  %s".printf (app_name, pkg.version);
+					formatted_all += "%s  %s".printf (app_name, pkg.version);
 				}
 			}
+			all_lines = formatted_all;
+			repo_aur_lines = formatted_repo_aur;
 		}
 
 		// A complete coordinator result is only reusable when the local
