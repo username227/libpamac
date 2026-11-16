@@ -14,8 +14,9 @@ namespace Pamac {
 		bool checking = false;
 		bool stalled = false;
 		uint64 generation = 0;
-		uint invalidation_epoch = 0;
-		uint pending_epoch = 0;
+		uint64 invalidation_epoch = 0;
+		uint64 pending_epoch = 0;
+		bool recheck_queued = false;
 		uint watchdog_source = 0;
 		int last_status = 103;
 		string[] last_updates = {};
@@ -72,6 +73,73 @@ namespace Pamac {
 			completed_at = 0;
 		}
 
+		public uint64 begin_external_check () throws DBusError, IOError {
+			// A token fences the future result against every package change,
+			// other explicit refresh, or queued post-installation check.
+			invalidation_epoch++;
+			completed_at = 0;
+			return invalidation_epoch;
+		}
+
+		public bool publish_external_check (uint64 epoch,
+			string[] updates, string[] repo_aur_updates) throws DBusError, IOError {
+			if (epoch == 0 || epoch != invalidation_epoch) {
+				return false;
+			}
+			// Reject malformed/empty entries and ensure the repo/AUR profile
+			// is truly a subset of the complete default-profile result.
+			foreach (unowned string line in updates) {
+				if (line.strip () == "") {
+					return false;
+				}
+			}
+			foreach (unowned string line in repo_aur_updates) {
+				if (line.strip () == "") {
+					return false;
+				}
+				bool found = false;
+				foreach (unowned string full_line in updates) {
+					if (line == full_line) {
+						found = true;
+						break;
+					}
+				}
+				if (!found) {
+					return false;
+				}
+			}
+			// Fence older workers; their final callback may not replace this
+			// newer verified snapshot.
+			invalidation_epoch++;
+			last_status = updates.length == 0 ? 0 : 100;
+			last_updates = copy_lines (updates);
+			last_repo_aur_updates = copy_lines (repo_aur_updates);
+			completed_at = GLib.get_monotonic_time ();
+			message ("Pamac external update result published: %u lines",
+				(uint) updates.length);
+			check_finished ("default", generation, last_status, copy_lines (last_updates));
+			check_finished ("repo-aur", generation,
+				repo_aur_status (last_status, last_repo_aur_updates),
+				copy_lines (last_repo_aur_updates));
+			return true;
+		}
+
+		public void recheck_after_transaction () throws DBusError, IOError {
+			invalidate ();
+			if (checking) {
+				// A transaction can finish while another worker still owns the
+				// AUR source lock. Start exactly one new scan after it exits.
+				recheck_queued = true;
+				return;
+			}
+			bool running;
+			uint64 check_id;
+			int status;
+			string[] updates;
+			request_check ("default", true, out running, out check_id,
+				out status, out updates);
+		}
+
 		private void finish_check (uint64 id, int status, string[] lines,
 			string[] repo_aur_lines) {
 			if (!checking || id != generation) {
@@ -82,10 +150,18 @@ namespace Pamac {
 				Source.remove (watchdog_source);
 				watchdog_source = 0;
 			}
-			if (pending_epoch != invalidation_epoch &&
-				(status == 0 || status == 100)) {
-				message ("Pamac check result incomplete: state invalidated during check");
-				status = 103;
+			if (pending_epoch != invalidation_epoch) {
+				if (completed_at != 0 &&
+					(last_status == 0 || last_status == 100)) {
+					// An external GTK/CLI check published a newer complete
+					// snapshot. Do not let an older worker overwrite it.
+					status = last_status;
+					lines = copy_lines (last_updates);
+					repo_aur_lines = copy_lines (last_repo_aur_updates);
+				} else if (status == 0 || status == 100) {
+					message ("Pamac check result incomplete: state invalidated during check");
+					status = 103;
+				}
 			}
 			last_status = status;
 			last_updates = copy_lines (lines);
@@ -100,6 +176,22 @@ namespace Pamac {
 			check_finished ("default", id, status, copy_lines (lines));
 			check_finished ("repo-aur", id,
 				repo_aur_status (status, repo_aur_lines), copy_lines (repo_aur_lines));
+			if (recheck_queued) {
+				recheck_queued = false;
+				Idle.add (() => {
+					try {
+						bool running;
+						uint64 next_id;
+						int next_status;
+						string[] next_updates;
+						request_check ("default", true, out running, out next_id,
+							out next_status, out next_updates);
+					} catch (Error e) {
+						warning ("Could not start queued Pamac check: %s", e.message);
+					}
+					return false;
+				});
+			}
 		}
 
 		// A complete worker with Flatpak-only updates is a clean result
