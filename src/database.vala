@@ -2280,6 +2280,40 @@ namespace Pamac {
 		}
 
 
+		// Consistent, category-aware lines for direct-check publication.
+		// Keep this identical to pamac-checkupdates' visible format, so
+		// GTK and CLI can publish a complete typed snapshot without rerunning
+		// VCS checks or guessing categories from display text.
+		public static void format_shared_update_lines (Updates updates,
+			out string[] all_lines, out string[] repo_aur_lines) {
+			all_lines = {};
+			repo_aur_lines = {};
+			foreach (unowned AlpmPackage pkg in updates.repos_updates) {
+				string line;
+				if (pkg.installed_version != null) {
+					line = "%s  %s -> %s".printf (pkg.name, pkg.installed_version, pkg.version);
+				} else {
+					line = "%s  %s".printf (pkg.name, pkg.version);
+				}
+				all_lines += line;
+				repo_aur_lines += line;
+			}
+			foreach (unowned AURPackage pkg in updates.aur_updates) {
+				string line = "%s  %s -> %s".printf (
+					pkg.name, pkg.installed_version, pkg.version);
+				all_lines += line;
+				repo_aur_lines += line;
+			}
+			foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
+				unowned string? app_name = pkg.app_name;
+				if (app_name == null) {
+					all_lines += "%s  %s".printf (pkg.name, pkg.version);
+				} else {
+					all_lines += "%s  %s".printf (app_name, pkg.version);
+				}
+			}
+		}
+
 		// A complete coordinator result is only reusable when the local
 		// typed snapshot agrees *exactly* on package names and versions.
 		// This prevents stale .SRCINFO, split package bases or intervening
@@ -2295,27 +2329,9 @@ namespace Pamac {
 					}
 				}
 			}
-			string[] local_lines = {};
-			foreach (unowned AlpmPackage pkg in updates.repos_updates) {
-				if (pkg.installed_version != null) {
-					local_lines += "%s  %s -> %s".printf (
-						pkg.name, pkg.installed_version, pkg.version);
-				} else {
-					local_lines += "%s  %s".printf (pkg.name, pkg.version);
-				}
-			}
-			foreach (unowned AURPackage pkg in updates.aur_updates) {
-				local_lines += "%s  %s -> %s".printf (
-					pkg.name, pkg.installed_version, pkg.version);
-			}
-			foreach (unowned FlatpakPackage pkg in updates.flatpak_updates) {
-				unowned string? app_name = pkg.app_name;
-				if (app_name == null) {
-					local_lines += "%s  %s".printf (pkg.name, pkg.version);
-				} else {
-					local_lines += "%s  %s".printf (app_name, pkg.version);
-				}
-			}
+			string[] local_lines;
+			string[] repo_aur_lines;
+			format_shared_update_lines (updates, out local_lines, out repo_aur_lines);
 			if (shared_lines.length != local_lines.length) {
 				return false;
 			}
