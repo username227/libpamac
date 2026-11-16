@@ -6,6 +6,8 @@
  * The lock file must never be unlinked; it lives beside the build directory.
  */
 int pamac_aur_lock_fd_try (const char *path);
+/* Allow concurrent read-only metadata reads, but keep build/source writes exclusive. */
+int pamac_aur_lock_fd_try_shared (const char *path);
 void pamac_aur_lock_fd_release (int fd);
 
 #endif
