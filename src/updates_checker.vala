@@ -25,6 +25,9 @@ namespace Pamac {
 		GLib.File _lock;
 		FileMonitor lock_monitor;
 		UpdateCoordinator? coordinator;
+		bool transaction_in_progress = false;
+		uint64 transaction_sequence = 0;
+		int64 transaction_completed_at = 0;
 		uint16 _updates_nb;
 		string[] _updates_list;
 		public uint16 updates_nb { get { return _updates_nb; } }
@@ -36,6 +39,8 @@ namespace Pamac {
 		// A new coordinated scan has started; keep the known icon but
 		// make the tray react immediately rather than appearing idle.
 		public signal void updates_checking ();
+		public signal void updates_updating ();
+		public signal void updates_operation_finished (bool success, bool verified_full_upgrade);
 		// A partial check must not clear last-known updates.
 		// 'deferred' means an active Pamac build prevented VCS inspection.
 		public signal void updates_incomplete (bool deferred);
@@ -62,8 +67,26 @@ namespace Pamac {
 				coordinator = Bus.get_proxy_sync (BusType.SESSION,
 					"org.manjaro.pamac.UpdateCoordinator1",
 					"/org/manjaro/pamac/UpdateCoordinator1");
+				coordinator.transaction_started.connect (() => {
+					transaction_in_progress = true;
+					transaction_sequence++;
+					if (check_lock_timeout_id != 0) {
+						Source.remove (check_lock_timeout_id);
+						check_lock_timeout_id = 0;
+					}
+					updates_updating ();
+				});
+				coordinator.transaction_finished.connect ((success, verified) => {
+					transaction_in_progress = false;
+					transaction_completed_at = GLib.get_monotonic_time ();
+					if (check_lock_timeout_id != 0) {
+						Source.remove (check_lock_timeout_id);
+						check_lock_timeout_id = 0;
+					}
+					updates_operation_finished (success, verified);
+				});
 				coordinator.check_started.connect ((profile, check_id) => {
-					if (profile == "default") {
+					if (profile == "default" && !transaction_in_progress) {
 						if (check_lock_timeout_id != 0) {
 							Source.remove (check_lock_timeout_id);
 							check_lock_timeout_id = 0;
@@ -72,7 +95,7 @@ namespace Pamac {
 					}
 				});
 			coordinator.check_finished.connect ((profile, check_id, status, lines) => {
-					if (profile == "default") {
+					if (profile == "default" && !transaction_in_progress) {
 						// A successful coordinated result supersedes the old
 						// 5-second lock-release retry; avoid duplicate VCS work.
 						if ((status == 0 || status == 100) &&
@@ -84,7 +107,7 @@ namespace Pamac {
 					}
 				});
 				coordinator.check_stalled.connect ((profile, check_id) => {
-					if (profile == "default") {
+					if (profile == "default" && !transaction_in_progress) {
 						// The worker remains alive: never clear a known update.
 						updates_incomplete (false);
 					}
@@ -116,6 +139,10 @@ namespace Pamac {
 		}
 
 		public void check_updates () {
+			if (transaction_in_progress) {
+				return;
+			}
+			uint64 observed_transaction_sequence = transaction_sequence;
 			lock_monitor.changed.disconnect (on_lock_changed);
 			config.reload ();
 			if (config.refresh_period != 0) {
@@ -151,6 +178,12 @@ namespace Pamac {
 				} catch (Error e) {
 					warning (e.message);
 				}
+				if (observed_transaction_sequence != transaction_sequence) {
+					// A package operation started while this asynchronous check
+					// was waiting; it supersedes the earlier result.
+					lock_monitor.changed.connect (on_lock_changed);
+					return;
+				}
 				if (exit_status == 0) {
 					// A *complete* check is the only proof of no updates.
 					_updates_nb = 0;
@@ -178,6 +211,13 @@ namespace Pamac {
 		}
 
 		void on_lock_changed (File src, File? dest, FileMonitorEvent event_type) {
+			if (transaction_in_progress ||
+				(transaction_completed_at != 0 &&
+				 GLib.get_monotonic_time () - transaction_completed_at < 10 * TimeSpan.SECOND)) {
+				// Never schedule the old 5-second post-lock scan for a
+				// coordinated package operation; its outcome is already known.
+				return;
+			}
 			if (event_type == FileMonitorEvent.CREATED) {
 				if (check_lock_timeout_id != 0) {
 					Source.remove (check_lock_timeout_id);
