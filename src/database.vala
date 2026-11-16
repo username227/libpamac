@@ -27,6 +27,10 @@ namespace Pamac {
 		public bool last_vcs_scan_reused { get; private set; }
 		string? recent_vcs_stamp = null;
 		int64 recent_vcs_checked_at = 0;
+		// Exact VCS package coverage of the verified update-page check.
+		// A transaction may ignore more packages, but may not reuse metadata
+		// for an unscanned package.
+		GenericSet<string?>? recent_vcs_checked_pkgs = null;
 		// A failed Flatpak lookup must never be reported as zero updates.
 		public bool last_flatpak_updates_success { get; private set; }
 		// True when a GUI/background update query intentionally omitted VCS
@@ -2141,13 +2145,23 @@ namespace Pamac {
 			return Checksum.compute_for_string (ChecksumType.SHA256, state.str);
 		}
 
-		bool can_reuse_vcs_snapshot () {
+		bool can_reuse_vcs_snapshot (GenericArray<string> needed_vcs_pkgs) {
 			int64 age = GLib.get_monotonic_time () - recent_vcs_checked_at;
-			return config.enable_aur && config.check_aur_updates &&
-				config.check_aur_vcs_updates && last_vcs_refresh_success &&
-				recent_vcs_stamp != null && age >= 0 &&
-				age <= 2 * TimeSpan.MINUTE &&
-				recent_vcs_stamp == vcs_source_stamp ();
+			if (!config.enable_aur || !config.check_aur_updates ||
+				!config.check_aur_vcs_updates || !last_vcs_refresh_success ||
+				recent_vcs_stamp == null || recent_vcs_checked_pkgs == null ||
+				age < 0 || age > 2 * TimeSpan.MINUTE ||
+				recent_vcs_stamp != vcs_source_stamp ()) {
+				return false;
+			}
+			// AUR ignore selections after the check can only shrink the
+			// source set. A newly included VCS package must be rescanned.
+			foreach (unowned string name in needed_vcs_pkgs) {
+				if (!recent_vcs_checked_pkgs.contains (name)) {
+					return false;
+				}
+			}
+			return true;
 		}
 
 		void get_updates_real (ref Updates updates, bool refresh_vcs = true) {
@@ -2250,6 +2264,10 @@ namespace Pamac {
 							if (stamp != "") {
 								recent_vcs_stamp = stamp;
 								recent_vcs_checked_at = GLib.get_monotonic_time ();
+								recent_vcs_checked_pkgs = new GenericSet<string?> (str_hash, str_equal);
+								foreach (unowned string pkgname in vcs_local_pkgs) {
+									recent_vcs_checked_pkgs.add (pkgname.dup ());
+								}
 							}
 						}
 					} else {
@@ -2667,7 +2685,7 @@ namespace Pamac {
 						// Called by Transaction.run_async() while holding the exclusive
 						// AUR build lock, from selection through build/install.
 						last_vcs_scan_reused = config.check_aur_vcs_updates &&
-							reuse_recent_vcs_sources && can_reuse_vcs_snapshot ();
+							reuse_recent_vcs_sources && can_reuse_vcs_snapshot (vcs_local_pkgs);
 						// GTK gets explicit status even when a prior source
 						// refresh is reused (no per-package scan events exist).
 						// CLI doesn't opt in and keeps its existing output.
