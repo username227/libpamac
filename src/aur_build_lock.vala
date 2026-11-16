@@ -2,6 +2,9 @@ namespace Pamac {
     [CCode (cname = "pamac_aur_lock_fd_try", cheader_filename = "aur_build_lock.h")]
     internal extern int aur_build_lock_try (string path);
 
+    [CCode (cname = "pamac_aur_lock_fd_try_shared", cheader_filename = "aur_build_lock.h")]
+    internal extern int aur_build_lock_try_shared (string path);
+
     [CCode (cname = "pamac_aur_lock_fd_release", cheader_filename = "aur_build_lock.h")]
     internal extern void aur_build_lock_release (int fd);
 
@@ -17,6 +20,15 @@ namespace Pamac {
 
         // 1 = acquired, 0 = another process holds it, -1 = hard failure.
         public int try_acquire () {
+            return try_acquire_mode (false);
+        }
+
+        // Reuse completed source metadata with concurrent read-only clients.
+        public int try_acquire_shared () {
+            return try_acquire_mode (true);
+        }
+
+        private int try_acquire_mode (bool shared) {
             if (fd >= 0) {
                 return 1;
             }
@@ -26,7 +38,8 @@ namespace Pamac {
                 warning ("Cannot create directory for Pamac AUR lock: %s", lock_path);
                 return -1;
             }
-            int result = aur_build_lock_try (lock_path);
+            int result = shared ? aur_build_lock_try_shared (lock_path) :
+                aur_build_lock_try (lock_path);
             if (result >= 0) {
                 fd = result;
                 return 1;
