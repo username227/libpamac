@@ -2136,7 +2136,7 @@ namespace Pamac {
 				GenericArray<FlatpakPackage> flatpak_updates = updates.flatpak_updates;
 				last_flatpak_updates_success = !config.check_flatpak_updates;
 				if (config.check_flatpak_updates && config.enable_flatpak) {
-					last_flatpak_updates_success = flatpak_plugin.get_flatpak_updates (ref flatpak_updates);
+					last_flatpak_updates_success = flatpak_plugin.get_flatpak_updates (flatpak_updates);
 				}
 				if (config.check_aur_updates) {
 					AurBuildLock? source_lock = null;
@@ -2294,7 +2294,7 @@ namespace Pamac {
 			bool success = false;
 			try {
 				new Thread<int>.try ("get_flatpak_updates_only", () => {
-					success = flatpak_plugin.get_flatpak_updates (ref pkgs);
+					success = flatpak_plugin.get_flatpak_updates (pkgs);
 					context.invoke (collect_flatpak_updates_async.callback);
 					return 0;
 				});
