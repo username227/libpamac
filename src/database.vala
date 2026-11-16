@@ -1860,12 +1860,12 @@ namespace Pamac {
 			return cmdline;
 		}
 
-		public bool regenerate_srcinfo (string pkgname, Cancellable? cancellable = null) {
+		public bool regenerate_srcinfo (string pkgname, Cancellable? cancellable = null, bool force = false) {
 			unowned string real_aur_build_dir = get_real_aur_build_dir ();
 			string pkgdir_name = Path.build_filename (real_aur_build_dir, pkgname);
 			var srcinfo = File.new_for_path (Path.build_filename (pkgdir_name, ".SRCINFO"));
 			var pkgbuild = File.new_for_path (Path.build_filename (pkgdir_name, "PKGBUILD"));
-			if (srcinfo.query_exists ()) {
+			if (!force && srcinfo.query_exists ()) {
 				// check if PKGBUILD was modified after .SRCINFO
 				try {
 					FileInfo info = srcinfo.query_info ("time::modified", 0);
@@ -1923,12 +1923,12 @@ namespace Pamac {
 			return false;
 		}
 
-		public async bool regenerate_srcinfo_async (string pkgname, Cancellable? cancellable = null) {
+		public async bool regenerate_srcinfo_async (string pkgname, Cancellable? cancellable = null, bool force = false) {
 			bool success = false;
 			string pkgname_copy = pkgname;
 			try {
 				new Thread<int>.try ("regenerate_srcinfo", () => {
-					success = regenerate_srcinfo (pkgname_copy, cancellable);
+					success = regenerate_srcinfo (pkgname_copy, cancellable, force);
 					context.invoke (regenerate_srcinfo_async.callback);
 					return 0;
 				});
@@ -1986,13 +1986,12 @@ namespace Pamac {
 			lock (alpm_config) {
 				foreach (unowned AURInfos aur_infos in aur_infos_list) {
 					unowned string name = aur_infos.name;
-					AURPackageLinked pkg = aur_pkgs_cache.lookup (name);
-					if (pkg == null) {
-						unowned Alpm.Package? local_pkg = alpm_handle.localdb.get_pkg (name);
-						pkg = new AURPackageLinked ();
-						pkg.initialise_from_aur_infos (aur_infos, local_pkg, this);
-						aur_pkgs_cache.replace (pkg.id, pkg);
-					}
+					// Use the current RPC metadata, not lazy fields cached from
+					// an earlier revision of this AUR package.
+					unowned Alpm.Package? local_pkg = alpm_handle.localdb.get_pkg (name);
+					var pkg = new AURPackageLinked ();
+					pkg.initialise_from_aur_infos (aur_infos, local_pkg, this);
+					aur_pkgs_cache.replace (pkg.id, pkg);
 					data.insert (name, pkg);
 				}
 			}

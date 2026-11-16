@@ -438,11 +438,13 @@ namespace Pamac {
 			yield launch_subprocess ({"mkdir", "-p", aurdb_path});
 			aur_desc_list.remove_all ();
 			already_checked_aur_dep.remove_all ();
+			// Keep one consistent SRCINFO snapshot per package base.
+			var refreshed_srcinfo_bases = new GenericSet<string?> (str_hash, str_equal);
 			var to_build_array = new GenericArray<string> ();
 			foreach (unowned string pkgname in to_build) {
 				to_build_array.add (pkgname);
 			}
-			bool success = yield check_aur_dep_list (to_build_array);
+			bool success = yield check_aur_dep_list (to_build_array, refreshed_srcinfo_bases);
 			if (success && aur_desc_list.length > 0) {
 				// create a fake aur db
 				string tmp_aurdb_path = "%s/pamac_aur.db".printf (tmp_path);
@@ -469,7 +471,8 @@ namespace Pamac {
 			return success;
 		}
 
-		async bool check_aur_dep_list (GenericArray<string> pkgnames) {
+		async bool check_aur_dep_list (GenericArray<string> pkgnames,
+											GenericSet<string?> refreshed_srcinfo_bases) {
 			var dep_to_check = new GenericArray<string> ();
 			var to_get_from_aur = new GenericArray<string> ();
 			foreach (unowned string pkgname in pkgnames) {
@@ -496,6 +499,11 @@ namespace Pamac {
 				File? clone_dir = File.new_for_path (Path.build_filename (real_aur_build_dir, pkgname));
 				if (pkgname in clone_files) {
 					aur_pkg = aur_pkgs.lookup (pkgname);
+					if (aur_pkg != null) {
+						// Split outputs share their package base's source directory.
+						clone_dir = File.new_for_path (Path.build_filename (
+							real_aur_build_dir, aur_pkg.packagebase ?? pkgname));
+					}
 					if (aur_pkg == null) {
 						// may be a virtual package
 						// use search and add results
@@ -515,7 +523,7 @@ namespace Pamac {
 						// refresh build files
 						// use packagebase in case of split package
 						emit_action (dgettext (null, "Cloning %s build files").printf (aur_pkg.packagebase) + "...");
-						clone_dir = yield database.clone_build_files_async (aur_pkg.packagebase, false, build_cancellable);
+						clone_dir = yield database.clone_build_files_async (aur_pkg.packagebase ?? pkgname, false, build_cancellable);
 						if (build_cancellable.is_cancelled ()) {
 							return false;
 						}
@@ -525,30 +533,12 @@ namespace Pamac {
 							details.add (dgettext (null, "Failed to clone %s build files").printf (aur_pkg.packagebase));
 							emit_error (dgettext (null, "Failed to prepare transaction"), details);
 							return false;
-						} else {
-							emit_action (dgettext (null, "Generating %s information").printf (pkgname) + "...");
-							bool success = yield database.regenerate_srcinfo_async (pkgname, build_cancellable);
-							if (!success) {
-								// error
-								var details = new GenericArray<string> (1);
-								details.add (dgettext (null, "Failed to generate %s information").printf (pkgname));
-								emit_error (dgettext (null, "Failed to prepare transaction"), details);
-								return false;
-							}
-						}
+						// Refresh from PKGBUILD in the common preflight path below.
 					} else {
 						clone_files.add (aur_pkg.packagebase);
 					}
 				} else if (clone_dir.query_exists ()) {
-						emit_action (dgettext (null, "Generating %s information").printf (pkgname) + "...");
-						bool success = yield database.regenerate_srcinfo_async (pkgname, build_cancellable);
-						if (!success) {
-							// error
-							var details = new GenericArray<string> (1);
-							details.add (dgettext (null, "Failed to generate %s information").printf (pkgname));
-							emit_error (dgettext (null, "Failed to prepare transaction"), details);
-							return false;
-						}
+					// Refresh from PKGBUILD in the common preflight path below.
 				} else {
 					// didn't find the target
 					// parse all builddir to be sure to find it
@@ -569,7 +559,11 @@ namespace Pamac {
 									unowned string child_filename = child_info.get_name ();
 									if (child_filename == "PKGBUILD") {
 										// check pkgnames of srcinfo to targets
-										bool success = database.regenerate_srcinfo (filename, null);
+										bool success = filename in refreshed_srcinfo_bases ||
+												database.regenerate_srcinfo (filename, build_cancellable, true);
+										if (success) {
+											refreshed_srcinfo_bases.add (filename);
+										}
 										if (success) {
 											var srcinfo = child_file.get_child (".SRCINFO");
 											// read .SRCINFO
@@ -617,7 +611,22 @@ namespace Pamac {
 				emit_action (dgettext (null, "Checking %s dependencies").printf (pkgname) + "...");
 				string arch = Posix.utsname ().machine;
 				if (clone_dir.query_exists ()) {
-					// use .SRCINFO
+					// A newer mtime does not guarantee current dependencies:
+					// regenerate from PKGBUILD before using preliminary metadata.
+					string source_base = clone_dir.get_basename () ?? pkgname;
+					if (!(source_base in refreshed_srcinfo_bases)) {
+						emit_action (dgettext (null, "Generating %s information").printf (source_base) + "...");
+						bool generated = yield database.regenerate_srcinfo_async (
+							source_base, build_cancellable, true);
+						if (!generated) {
+							var details = new GenericArray<string> (1);
+							details.add (dgettext (null, "Failed to generate %s information").printf (source_base));
+							emit_error (dgettext (null, "Failed to prepare transaction"), details);
+							return false;
+						}
+						refreshed_srcinfo_bases.add (source_base);
+					}
+					// use the regenerated .SRCINFO
 					var srcinfo = clone_dir.get_child (".SRCINFO");
 					try {
 						// read .SRCINFO
@@ -977,7 +986,7 @@ namespace Pamac {
 				}
 			}
 			if (dep_to_check.length > 0) {
-				return yield check_aur_dep_list (dep_to_check);
+				return yield check_aur_dep_list (dep_to_check, refreshed_srcinfo_bases);
 			}
 			return true;
 		}
