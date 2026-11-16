@@ -182,13 +182,32 @@ No integration merges or production releases are authorized.
    notifications. `pamac upgrade` still makes fresh transaction-time
    decisions; use dry-run/controlled environments rather than real upgrade.
 
+### GTK contention regression (pending new local build)
+
+The GTK Updates view must display **no partial or stale update list**
+while another Pamac transaction owns the AUR build lock, including while
+the CLI waits at its transaction-confirmation prompt. Instead it shows
+an inline waiting state (no modal error), polling **only** the advisory
+lock state once per second via `Database.probe_aur_build_lock()`.
+On release, `Database.get_updates_after_aur_unlock_async()` reloads
+libalpm local/sync database handles and runs a **fresh complete** native
+VCS check. It populates the Updates page only on success. A new lock
+race re-enters waiting; leaving Updates or closing cancels the timer.
+No previously verified or partial package list is selectable meanwhile.
+
+Test with a controlled flock held by another process: open the GTK
+Updates page, verify waiting/no modal, release flock, verify full
+automatic refresh and enabled update actions only after completion.
+Also test while `pamac upgrade` waits for [y/N], then finish or
+cancel and check automatic recovery. Ensure a hard source error
+(still status 102/103) is not misreported as success.
+
 ## Not part of this checkpoint
 
 - Dedicated typed D-Bus serialization (clients currently reconstruct
   from source metadata under flock after a shared check).
 - Full sharing for alternate/custom CLI profiles.
 - Per-package VCS progress streaming from the coordinator subprocess.
-- Automatic GUI retry when an AUR build releases its flock.
 - Production deployment and upstream PR preparation.
 
 **No integration branches have been merged or changed by this feature work.**
