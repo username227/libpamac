@@ -200,6 +200,13 @@ namespace Pamac {
 			return status == 100 && repo_aur_lines.length == 0 ? 0 : status;
 		}
 
+		private bool has_newer_published_snapshot () {
+			return checking && pending_epoch != invalidation_epoch &&
+				completed_at != 0 &&
+				(last_status == 0 || last_status == 100) &&
+				GLib.get_monotonic_time () - completed_at < 30 * TimeSpan.SECOND;
+		}
+
 		// Read-only clients can reuse a running or recently finished job,
 		// but must never initiate the standalone worker: that worker may
 		// refresh pacman sync/files DBs, unlike native "checkupdates".
@@ -216,6 +223,12 @@ namespace Pamac {
 				last_repo_aur_updates : last_updates);
 			available = false;
 			running = false;
+			if (has_newer_published_snapshot ()) {
+				// An older worker is still exiting, but a newer GTK/CLI
+				// snapshot has already been verified and broadcast.
+				available = true;
+				return;
+			}
 			if (checking) {
 				available = true;
 				running = !stalled;
@@ -241,6 +254,10 @@ namespace Pamac {
 			check_id = generation;
 			status = last_status;
 			updates = copy_lines (last_updates);
+			if (!force && has_newer_published_snapshot ()) {
+				running = false;
+				return;
+			}
 			if (checking) {
 				// A stalled worker remains tracked and MUST NOT be duplicated.
 				// Clients receive incomplete status without waiting forever.
