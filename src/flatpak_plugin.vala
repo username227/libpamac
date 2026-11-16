@@ -698,7 +698,7 @@ namespace Pamac {
 			}
 		}
 
-		public void get_flatpak_updates (ref GenericArray<FlatpakPackage> pkgs) {
+		public bool get_flatpak_updates (ref GenericArray<FlatpakPackage> pkgs) {
 			try {
 				lock (pkgs_cache)  {
 					GenericArray<unowned Flatpak.InstalledRef> update_apps = installation.list_installed_refs_for_update ();
@@ -715,8 +715,10 @@ namespace Pamac {
 						}
 					}
 				}
+				return true;
 			} catch (Error e) {
-				warning (e.message);
+				warning ("Flatpak update discovery failed: %s", e.message);
+				return false;
 			}
 		}
 
