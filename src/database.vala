@@ -24,6 +24,9 @@ namespace Pamac {
 		Alpm.Handle? files_handle;
 		HashTable<string, AURPackageLinked> aur_vcs_pkgs;
 		public bool last_vcs_refresh_success { get; private set; }
+		public bool last_vcs_scan_reused { get; private set; }
+		string? recent_vcs_stamp = null;
+		int64 recent_vcs_checked_at = 0;
 		// A failed Flatpak lookup must never be reported as zero updates.
 		public bool last_flatpak_updates_success { get; private set; }
 		// True when a GUI/background update query intentionally omitted VCS
@@ -2084,6 +2087,56 @@ namespace Pamac {
 		// When a shared coordinator check has just completed, reuse the
 		// already refreshed VCS .SRCINFO while still taking the build flock
 		// for safe reads. Regular calls must continue refreshing sources.
+		// Reuse only a recent, complete check whose on-disk source metadata and
+		// installed-package state are unchanged. Called under alpm_config;
+		// transactions additionally own the exclusive AUR build lock.
+		string vcs_source_stamp () {
+			var state = new StringBuilder (get_real_aur_build_dir ());
+			var installed = alpm_handle.localdb.pkgcache;
+			while (installed != null) {
+				unowned Alpm.Package pkg = installed.data;
+				state.append (pkg.name);
+				state.append (pkg.version);
+				if (pkg.name.has_suffix ("-git") || pkg.name.has_suffix ("-svn") ||
+					pkg.name.has_suffix ("-hg") || pkg.name.has_suffix ("-bzr")) {
+					foreach (unowned string filename in {".SRCINFO", "PKGBUILD"}) {
+						string pathname = Path.build_filename (
+							get_real_aur_build_dir (), pkg.name, filename);
+						try {
+							string contents;
+							FileUtils.get_contents (pathname, out contents);
+							state.append (Checksum.compute_for_string (ChecksumType.SHA256, contents));
+						} catch (FileError e) {
+							state.append ("missing:");
+							state.append (filename);
+						}
+					}
+				}
+				installed.next ();
+			}
+			// Detect external package transactions even if the ALPM handle
+			// has not yet been reloaded.
+			try {
+				var dir = File.new_for_path (Path.build_filename (config.db_path, "local"));
+				var info = dir.query_info (
+					"time::modified,time::modified-usec", FileQueryInfoFlags.NONE);
+				state.append (info.get_attribute_uint64 ("time::modified").to_string ());
+				state.append (info.get_attribute_uint32 ("time::modified-usec").to_string ());
+			} catch (Error e) {
+				return "";
+			}
+			return Checksum.compute_for_string (ChecksumType.SHA256, state.str);
+		}
+
+		bool can_reuse_vcs_snapshot () {
+			int64 age = GLib.get_monotonic_time () - recent_vcs_checked_at;
+			return config.enable_aur && config.check_aur_updates &&
+				config.check_aur_vcs_updates && last_vcs_refresh_success &&
+				recent_vcs_stamp != null && age >= 0 &&
+				age <= 2 * TimeSpan.MINUTE &&
+				recent_vcs_stamp == vcs_source_stamp ();
+		}
+
 		void get_updates_real (ref Updates updates, bool refresh_vcs = true) {
 			last_vcs_refresh_success = true;
 			vcs_updates_deferred = false;
@@ -2179,6 +2232,13 @@ namespace Pamac {
 					});
 					if (last_vcs_refresh_success) {
 						get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
+						if (!vcs_updates_deferred && source_lock != null) {
+							string stamp = vcs_source_stamp ();
+							if (stamp != "") {
+								recent_vcs_stamp = stamp;
+								recent_vcs_checked_at = GLib.get_monotonic_time ();
+							}
+						}
 					} else {
 						context.invoke (() => {
 							emit_warning ("Development package source check failed; AUR update results are incomplete");
@@ -2554,7 +2614,8 @@ namespace Pamac {
 			}
 		}
 
-		internal async Updates get_aur_updates_async (GenericSet<string?> ignorepkgs) {
+		internal async Updates get_aur_updates_async (
+			GenericSet<string?> ignorepkgs, bool reuse_recent_vcs_sources = false) {
 			var updates = new Updates ();
 			try {
 				new Thread<int>.try ("get_aur_updates", () => {
@@ -2591,8 +2652,11 @@ namespace Pamac {
 						}
 						// Called by Transaction.run_async() while holding the exclusive
 						// AUR build lock, from selection through build/install.
+						last_vcs_scan_reused = config.check_aur_vcs_updates &&
+							reuse_recent_vcs_sources && can_reuse_vcs_snapshot ();
 						aur_vcs_pkgs.remove_all ();
 						last_vcs_refresh_success = !config.check_aur_vcs_updates ||
+							last_vcs_scan_reused ||
 							refresh_vcs_sources (vcs_local_pkgs, true);
 						if (last_vcs_refresh_success) {
 							get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
