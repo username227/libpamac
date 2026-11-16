@@ -19,6 +19,9 @@
 
 namespace Pamac {
 	public class UpdatesChecker : Object {
+		// Debounce external pacman/makepkg installs before the tray asks for
+		// another complete update check (including expensive VCS sources).
+		const uint EXTERNAL_PACKAGE_SETTLE_SECONDS = 30;
 		MainLoop loop;
 		Config config;
 		uint check_lock_timeout_id;
@@ -97,7 +100,7 @@ namespace Pamac {
 			coordinator.check_finished.connect ((profile, check_id, status, lines) => {
 					if (profile == "default" && !transaction_in_progress) {
 						// A successful coordinated result supersedes the old
-						// 5-second lock-release retry; avoid duplicate VCS work.
+						// pending external-installation retry; avoid duplicate VCS work.
 						if ((status == 0 || status == 100) &&
 							check_lock_timeout_id != 0) {
 							Source.remove (check_lock_timeout_id);
@@ -214,8 +217,8 @@ namespace Pamac {
 			if (transaction_in_progress ||
 				(transaction_completed_at != 0 &&
 				 GLib.get_monotonic_time () - transaction_completed_at < 10 * TimeSpan.SECOND)) {
-				// Never schedule the old 5-second post-lock scan for a
-				// coordinated package operation; its outcome is already known.
+				// A coordinated Pamac operation publishes its own terminal
+				// status; it needs no external-installation recheck.
 				return;
 			}
 			if (event_type == FileMonitorEvent.CREATED) {
@@ -228,11 +231,19 @@ namespace Pamac {
 				if (check_lock_timeout_id != 0) {
 					Source.remove (check_lock_timeout_id);
 				}
-				check_lock_timeout_id = Timeout.add (5000, () => {
-					check_updates ();
-					check_lock_timeout_id = 0;
-					return false;
-				});
+				// Trailing-edge debounce: another pacman -U/makepkg -i will
+				// create db.lck and cancel this timer. Only the final lock
+				// release in a burst starts a complete update check.
+				check_lock_timeout_id = Timeout.add_seconds (
+					EXTERNAL_PACKAGE_SETTLE_SECONDS, () => {
+						check_lock_timeout_id = 0;
+						// Guard against a missed lock-created event. A later
+						// lock deletion will reschedule us when pacman finishes.
+						if (!transaction_in_progress && !_lock.query_exists ()) {
+							check_updates ();
+						}
+						return false;
+					});
 			}
 		}
 	}
