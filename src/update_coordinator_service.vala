@@ -158,7 +158,11 @@ namespace Pamac {
 				// A complete default-profile sysupgrade just checked and
 				// applied its selected repo/AUR/Flatpak upgrades. Reuse that
 				// outcome directly instead of starting another VCS scan.
-				generation++;
+				// Keep the in-flight worker's ID intact until it exits;
+				// otherwise its callback could leave checking stuck forever.
+				if (!checking) {
+					generation++;
+				}
 				last_status = 0;
 				last_updates = {};
 				last_repo_aur_updates = {};
