@@ -32,7 +32,17 @@ namespace Pamac {
 		// one fresh shared check. Never keep an old tray state indefinitely.
 		public abstract void recheck_after_transaction () throws DBusError, IOError;
 
+		// A package operation is one continuous lifecycle: notify listeners
+		// at its start and publish its result at completion. No separate
+		// post-transaction discovery worker is required.
+		public abstract uint64 begin_transaction () throws DBusError, IOError;
+		public abstract void finish_transaction (uint64 transaction_id,
+			bool success, bool full_default_upgrade) throws DBusError, IOError;
+
 		public abstract void invalidate () throws DBusError, IOError;
+
+		public signal void transaction_started ();
+		public signal void transaction_finished (bool success, bool full_default_upgrade);
 
 		public signal void check_started (string profile, uint64 check_id);
 		public signal void check_progress (string profile, uint64 check_id,
