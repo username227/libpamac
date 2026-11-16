@@ -2201,6 +2201,38 @@ namespace Pamac {
 			return updates;
 		}
 
+		// Non-blocking probe for a GUI waiting on a different Pamac transaction.
+		// 1: available, 0: another process holds it, -1: cannot access the lock.
+		// This does not start any source refresh or hold the lock across checks.
+		public int probe_aur_build_lock () {
+			var source_lock = new AurBuildLock (get_real_aur_build_dir ());
+			int lock_status = source_lock.try_acquire ();
+			if (lock_status == 1) {
+				source_lock.release ();
+			}
+			return lock_status;
+		}
+
+		// After an external Pamac transaction releases its lock, reload the
+		// installed/sync package handles and perform a NEW complete VCS check.
+		// Do not reuse a snapshot that preceded the other transaction.
+		public async Updates get_updates_after_aur_unlock_async () {
+			var updates = new Updates ();
+			try {
+				new Thread<int>.try ("get_updates_after_aur_unlock", () => {
+					refresh ();
+					get_updates_real (ref updates);
+					context.invoke (get_updates_after_aur_unlock_async.callback);
+					return 0;
+				});
+				yield;
+			} catch (Error e) {
+				last_vcs_refresh_success = false;
+				warning ("Could not start post-transaction update check: %s", e.message);
+			}
+			return updates;
+		}
+
 		// Use only after pamac-checkupdates finished with a complete 0/100
 		// result for this exact profile. Keeps typed package/ignored lists
 		// without initiating a second VCS source refresh.
