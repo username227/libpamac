@@ -241,6 +241,15 @@ possible update profiles or failure paths.
 - Two real-world iptvnator-git builds succeeded, adding transaction
   regression evidence (not a substitute for exhaustive concurrency tests).
 
+Final runtime checks (2026-11-15):
+- Fresh coordinator check exited 0; an immediate join-only cache read exited
+  0; an explicit D-Bus Invalidate() succeeded; the subsequent join-only
+  read exited 104. This verifies cache invalidation independent of the TTL.
+- With an external exclusive flock held on the configured Pamac AUR lock
+  sibling path, native `pamac checkupdates --quiet` exited 101 and warned
+  "Development package check incomplete (status 101)." Shared-lock readers
+  therefore did not bypass a concurrent exclusive writer in this test.
+
 Remaining before feature promotion:
 
 1. Verify an explicit Invalidate() immediately removes a *fresh* coordinator
@@ -266,4 +275,4 @@ Remaining before feature promotion:
 - Per-package VCS progress streaming from the coordinator subprocess.
 - Production deployment and upstream PR preparation.
 
-**No integration branches have been merged or changed by this feature work.**
+**Feature testing ledger.** Integration branch promotion is handled separately after final local verification; keep the feature branch for traceability.
