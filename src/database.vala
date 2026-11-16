@@ -2092,7 +2092,7 @@ namespace Pamac {
 		// transactions additionally own the exclusive AUR build lock.
 		string vcs_source_stamp () {
 			var state = new StringBuilder (get_real_aur_build_dir ());
-			state.append (config.db_path);
+			state.append (alpm_config.dbpath);
 			state.append (config.check_aur_updates ? "aur-on" : "aur-off");
 			state.append (config.check_aur_vcs_updates ? "vcs-on" : "vcs-off");
 			foreach (unowned string ignored in config.ignorepkgs) {
@@ -2130,7 +2130,7 @@ namespace Pamac {
 			// Detect external package transactions even if the ALPM handle
 			// has not yet been reloaded.
 			try {
-				var dir = File.new_for_path (Path.build_filename (config.db_path, "local"));
+				var dir = File.new_for_path (Path.build_filename (alpm_config.dbpath, "local"));
 				var info = dir.query_info (
 					"time::modified,time::modified-usec", FileQueryInfoFlags.NONE);
 				state.append (info.get_attribute_uint64 ("time::modified").to_string ());
