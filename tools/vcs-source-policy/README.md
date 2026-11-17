@@ -170,6 +170,24 @@ packaging, installed and configuration evidence. Neither the probe nor the
 saved CLI-output importer can provide that equivalence by themselves.
 No production libpamac changes are authorized by these reports.
 
+## Broad, reproducible random AUR audit — mandatory before merging
+
+The independent research script `aur_random_audit.py` draws **three random,
+non-overlapping 200-package samples** from a frozen full AUR index using
+standard development-package suffixes, plus optional unsuffixed controls.
+It resolves split packagebases, reads only AUR packaging archives, archives
+the input texts/hashes, and reports every inconclusive or failed case.
+No remote application sources are cloned or built.
+
+The audit is **classification-only**. A `single-source` verdict is not
+proof of safe update detection; no installed commit is known for these packages.
+All suggested `N` flags demand independent review. The existing Pamac
+legacy checker is not modified or launched by this audit.
+
+See [RANDOM-AUR-AUDIT.md](RANDOM-AUR-AUDIT.md) for the full multi-run
+procedure, optional capped GitHub `.gitmodules` inspection, deterministic
+offline replay, evidence requirements and hard pre-merge gates.
+
 ## Analysis and testing
 
     python3 tools/vcs-source-policy/vcs_policy.py analyze \
