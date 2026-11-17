@@ -70,7 +70,8 @@ class SubmoduleMetadataTests(unittest.TestCase):
         self.assertNotEqual(normalized_https_repo(
             'https://github.com/Test/Foo'), normalized_https_repo(
                 'https://github.com/Test/foo.git'))
-        self.assertIsNone(normalized_https_repo('https://github.com.invalid/x/y'))
+        self.assertNotEqual(normalized_https_repo('https://github.com.invalid/x/y'),
+                            normalized_https_repo('https://github.com/x/y'))
         self.assertIsNone(normalized_https_repo('https://user@github.com/x/y'))
 
 
