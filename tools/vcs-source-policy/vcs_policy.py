@@ -216,6 +216,15 @@ def classify(srcinfo: str, pkgbuild: str, installed_package: str, installed_vers
         reasons.append("No statically accessible pkgver() function")
     if version_warnings or prepare_warnings:
         reasons.append("Packaging functions delegate to other shell code")
+    # Counting Git sources does not imply other VCS inputs are absent.
+    # A sole Git source plus a moving Mercurial/SVN/etc. dependency is still
+    # a sole *Git* identity, but not a self-contained upgrade comparison.
+    non_git_vcs = ("hg+", "svn+", "bzr+", "cvs+", "fossil+", "darcs+")
+    if any(raw.split("::", 1)[-1].startswith(non_git_vcs)
+           for raw in raw_sources):
+        reasons.append("Additional non-Git VCS source needs independent review")
+    if "--remote" in pkgbuild and "submodule" in pkgbuild:
+        reasons.append("PKGBUILD may advance submodules independently (--remote)")
 
     main: str | None = None
     method = "unresolved"
