@@ -331,7 +331,9 @@ pkgver() {
 }
 '''
         item = classify(original, unknown, 'myapp-git', 'r42.a-1')
-        self.assertEqual(item['classification'], 'inconclusive')
+        self.assertEqual(item['classification'], 'single-source')
+        self.assertEqual(item['source_identification_method'], 'sole-moving-git-source')
+        self.assertFalse(item['pkgver_source_reference_confirmed'])
         reassigned = '''_repo=myapp
 _repo=other
 pkgver() {
@@ -340,7 +342,8 @@ pkgver() {
 }
 '''
         item = classify(original, reassigned, 'myapp-git', 'r42.a-1')
-        self.assertEqual(item['classification'], 'inconclusive')
+        self.assertEqual(item['classification'], 'single-source')
+        self.assertFalse(item['pkgver_source_reference_confirmed'])
 
 
 
