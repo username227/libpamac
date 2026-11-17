@@ -90,6 +90,33 @@ refuses symlinked target JSON files. Obsolete JSONs for previously installed
 packages remain untouched but must NOT be treated as installed packages:
 current pacman inventory is authoritative.
 
+## Optional Git submodule metadata cross-check
+
+The new research-only `--inspect-gitmodules` option fetches a **small**
+`.gitmodules` file using GitHub's public contents API for a recognized
+primary GitHub source in a multi-Git PKGBUILD. It neither clones application
+sources nor runs packaging scripts. Source URLs are matched to exact HTTPS
+host/path identities, allowing only the conventional trailing `.git` difference.
+
+    python3 tools/vcs-source-policy/vcs_policy.py regenerate \
+      --installed --inspect-gitmodules --dry-run \
+      > /tmp/pamac-vcs-submodule-preview.json
+
+Cross-reference matches receive role `submodule-candidate` and a proposed
+`"rebuild": "N"`. **That N is not approved for use**: the package gets
+`review_required: true` and `lightweight_check_enabled: false`.
+The remote file may be newer than the installed parent's commit. Moreover,
+a PKGBUILD might use `git submodule update --remote`, explicitly overriding
+the parent's pinned submodule revision. Before we can activate N, we must
+inspect the actual PKGBUILD's `prepare()` and confirm that it honors parent
+gitlink pins. A matching URL alone proves only submodule *identity*.
+
+If metadata is missing, access fails or the primary isn't hosted on GitHub,
+classification remains conservative and the script does not assume an N.
+An optional offline fixture manifest can specify a `"gitmodules"` path
+alongside `"pkgbuild"` and `"srcinfo"`. Changes in inspected `.gitmodules`
+content invalidate existing kept-file fingerprints.
+
 ## Analysis and testing
 
     python3 tools/vcs-source-policy/vcs_policy.py analyze \
