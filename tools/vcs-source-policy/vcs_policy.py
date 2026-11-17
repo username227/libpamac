@@ -372,7 +372,7 @@ def package_policy(row: dict) -> dict:
             info["classification"] != "single-source" or
             not info["pkgver_source_reference_confirmed"] or
             bool(info["reasons"]) or
-            bool(re.search(r"(?m)^\\s*source_[A-Za-z0-9_]+\\s*=", row["srcinfo"]))),
+            bool(re.search(r"(?m)^\s*source_[A-Za-z0-9_]+\s*=", row["srcinfo"]))),
         "lightweight_check_enabled": False,
         "reasons": info["reasons"],
     }
