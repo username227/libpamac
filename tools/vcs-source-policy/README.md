@@ -214,6 +214,31 @@ A fully offline fixture manifest can replace --installed:
 
 Run regenerate --manifest /path/to/manifest.json --dry-run.
 
+## Sole Git source identification versus update-check readiness
+
+A PKGBUILD with **exactly one supported moving Git source** now receives
+`classification: "single-source"` and
+`source_identification_method: "sole-moving-git-source"` even when the
+static analyzer cannot parse its `pkgver()` directory expression. This
+means only that the Git source is identifiable, **not** that an update is
+known or that its pkgver can be reproduced from a remote commit.
+
+`pkgver_source_reference_confirmed` separately records whether the static
+`pkgver()` checkout is bound to that Git source. If that evidence is
+missing, or the PKGBUILD delegates to other shell code, uses additional
+non-Git VCS sources, architecture-specific source declarations, or
+independently floating submodules, `review_required` stays true and
+the read-only `vcs_probe.py` will not even query the moving remote.
+Every generated policy continues to set `lightweight_check_enabled: false`.
+
+Sole Git sources selected by fixed `#commit=` or `#tag=` are now labeled
+`classification: "fixed-source"`; remote branch advancement is irrelevant.
+Multiple-source cases still require source-binding and relationship review.
+
+The random audit now reports source identification and `pkgver()` binding
+as **separate counts**. Replay frozen samples to measure the effect without
+collecting a new or easier package cohort.
+
 ## Current classifier limitations
 
 The prototype statically identifies some literal pkgver() directory
