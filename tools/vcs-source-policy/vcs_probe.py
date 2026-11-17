@@ -159,8 +159,18 @@ def assess_package(row: dict, policy: dict, *, approve: dict[str, str],
     unresolved = [s for s in sources if s["role"] == "unresolved-git-source"]
     if len(primary) != 1 or unresolved:
         reasons.append("Primary or secondary Git source relationship unresolved")
-    if policy["classification"] not in ("single-source", "submodule-metadata-candidate"):
+    if policy["classification"] not in ("single-source", "submodule-metadata-candidate", "fixed-source"):
         reasons.append("Classifier could not establish complete source roles")
+    # Identifying a sole Git repository is NOT permission to turn a moving
+    # remote HEAD into an upgrade decision, or even to treat the reported
+    # installed version as a reliable source binding. Require the independent
+    # pkgver() check for all moving-source probes.
+    if (policy["classification"] != "fixed-source" and
+            not policy.get("pkgver_source_reference_confirmed", False)):
+        reasons.append("pkgver() Git source binding has not been independently verified")
+    if (policy["classification"] == "single-source" and
+            policy.get("review_required", False)):
+        reasons.append("PKGBUILD requires manual review before even an observational probe")
     if policy["classification"] == "submodule-metadata-candidate" and (
             approve.get(package) != policy.get("pkgbuild_sha256")):
         reasons.append("Submodule pinning requires review of this exact PKGBUILD hash")
