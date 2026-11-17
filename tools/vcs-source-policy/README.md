@@ -107,7 +107,7 @@ file. Example:
 ```
 
 The prototype applies overrides only to classifications it could not
-independently reduce to a single source. Both alias and URL must match the
+independently reduce to a single source. Alias, URL and optional Git ref fragment must all match the
 *currently retrieved* `.SRCINFO` entry. Stale identities are rejected rather
 than silently reassigned. User configuration is never overwritten by
 regeneration. An override does not manufacture a known installed Git commit,
