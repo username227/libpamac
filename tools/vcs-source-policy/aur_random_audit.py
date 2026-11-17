@@ -197,6 +197,8 @@ def audit_one(package_name: str, packagebase: str, pkgbuild: str, srcinfo: str,
     return {'package': package_name, 'packagebase': packagebase,
             'round': round_num, 'control': control, 'status': 'classified',
             'classification': p['classification'], 'review_required': p['review_required'],
+            'source_identification_method': p['source_identification_method'],
+            'pkgver_source_reference_confirmed': p['pkgver_source_reference_confirmed'],
             'lightweight_check_enabled': p['lightweight_check_enabled'],
             'source_count': len(sources), 'git_sources': len(git_sources),
             'fixed_git_sources': len(fixed), 'moving_git_sources': len(moving),
@@ -219,12 +221,22 @@ def summarize(rows: list[dict]) -> dict:
                                    'classification': dict(sorted(counts.items())),
                                    'red_flags': dict(sorted(flags.items())),
                                    'proposed_n_source_count': sum(r.get('n_sources', 0) for r in subset),
-                                   'review_required': sum(r.get('review_required', False) for r in subset)}
+                                   'review_required': sum(r.get('review_required', False) for r in subset),
+                                   'sole_moving_git_source_identified': sum(
+                                       r.get('source_identification_method') == 'sole-moving-git-source'
+                                       for r in subset),
+                                   'pkgver_source_reference_confirmed': sum(
+                                       r.get('pkgver_source_reference_confirmed', False) for r in subset)}
     return {'overall': {'attempted': len(rows),
                         'classified': sum(r['status'] == 'classified' for r in rows),
                         'errors': sum(r['status'] != 'classified' for r in rows),
                         'unique_packagebases': len({r.get('packagebase') for r in rows if r.get('packagebase')}),
                         'auto_authorized_lightweight_checks': sum(r.get('lightweight_check_enabled', False) for r in rows),
+                        'sole_moving_git_source_identified': sum(
+                            r.get('source_identification_method') == 'sole-moving-git-source'
+                            for r in rows),
+                        'pkgver_source_reference_confirmed': sum(
+                            r.get('pkgver_source_reference_confirmed', False) for r in rows),
                         'ground_truth_validated': False},
             'rounds': by_round}
 
