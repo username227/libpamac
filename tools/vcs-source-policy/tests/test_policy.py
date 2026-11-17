@@ -340,5 +340,82 @@ pkgver() {
 
 
 
+    def test_gitmodules_links_three_real_multi_git_cases_as_advisory(self):
+        """These URLs are found in the upstream .gitmodules of real AUR sources."""
+        fixtures = [
+            ("viper4linux-re-git", "viper4linux",
+             "https://github.com/username227/viper4linux-re.git",
+             ["https://github.com/likelikeslike/ViPERDSP.git"]),
+            ("jamesdsp-git", "JDSP4Linux",
+             "https://github.com/Audio4Linux/JDSP4Linux.git",
+             ["https://github.com/ThePBone/GraphicEQWidget.git",
+              "https://github.com/ThePBone/FlatTabWidget.git",
+              "https://github.com/ThePBone/LiquidEqualizerWidget.git",
+              "https://github.com/ThePBone/LiveprogIDE.git"]),
+            ("shadps4-qtlauncher-git", "shadps4-qtlauncher",
+             "https://github.com/shadps4-emu/shadps4-qtlauncher.git",
+             ["https://github.com/nlohmann/json.git",
+              "https://github.com/gabime/spdlog.git",
+              "https://github.com/zeux/volk.git"]),
+        ]
+        for pkg, main, main_url, secondary_urls in fixtures:
+            with self.subTest(package=pkg):
+                sources = [main + "::git+" + main_url]
+                sources += ["git+" + url for url in secondary_urls]
+                script = 'pkgver() {\n  cd "$srcdir/' + main + '"\n  git describe --long\n}\n'
+                # Matching URL evidence remains advisory: the test does NOT
+                # claim the installed PKGBUILD uses submodule gitlink pins.
+                modules = ''.join(
+                    '[submodule "deps/' + str(i) + '"]\n'
+                    '    path = deps/' + str(i) + '\n'
+                    '    url = ' + url.removesuffix(".git") + '\n'
+                    for i, url in enumerate(secondary_urls))
+                result = package_policy({
+                    'package': pkg, 'installed_version': 'r42.abc-1',
+                    'srcinfo': srcinfo(name=pkg, sources=sources),
+                    'pkgbuild': script, 'gitmodules': modules,
+                })
+                self.assertEqual(result['classification'],
+                                 'submodule-metadata-candidate')
+                self.assertTrue(result['review_required'])
+                self.assertFalse(result['lightweight_check_enabled'])
+                self.assertIsNone(result['installed_revision'])
+                self.assertEqual(
+                    [x['rebuild'] for x in result['sources']],
+                    ['Y'] + ['N'] * len(secondary_urls))
+                self.assertEqual(
+                    [x['role'] for x in result['sources'][1:]],
+                    ['submodule-candidate'] * len(secondary_urls))
+
+    def test_gitmodules_unrelated_url_never_marks_n(self):
+        text = 'pkgver() {\n cd "$srcdir/main"\n git describe\n}\n'
+        sources = ('main::git+https://github.com/owner/main.git',
+                   'other::git+https://github.com/owner/unrelated.git')
+        row = {'package': 'example-git', 'installed_version': 'r1.a-1',
+               'pkgbuild': text, 'srcinfo': srcinfo(name='example-git', sources=sources),
+               'gitmodules': ('[submodule "deps/other"]\n'
+                              '    path = deps/other\n'
+                              '    url = https://github.com/owner/something-else.git\n')}
+        result = package_policy(row)
+        self.assertEqual([x['rebuild'] for x in result['sources']], ['Y', 'Y'])
+        self.assertEqual(result['classification'], 'inconclusive')
+
+    def test_gitmodules_metadata_change_invalidates_kept_policy(self):
+        text = 'pkgver() {\n cd "$srcdir/main"\n git describe\n}\n'
+        sources = ('main::git+https://github.com/owner/main.git',
+                   'other::git+https://github.com/owner/other.git')
+        modules = ('[submodule "deps/other"]\n'
+                   '  path = deps/other\n'
+                   '  url = https://github.com/owner/other.git\n')
+        row = {'package': 'example-git', 'installed_version': 'r1.a-1',
+               'pkgbuild': text, 'srcinfo': srcinfo(name='example-git', sources=sources),
+               'gitmodules': modules}
+        old = package_policy(row)
+        changed = dict(row, gitmodules=modules + '\n# remote metadata changed\n')
+        new = package_policy(changed)
+        self.assertIn('Packaging metadata changed', validate_kept_policy(old, new))
+
+
+
 if __name__ == '__main__':
     unittest.main()
