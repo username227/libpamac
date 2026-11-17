@@ -19,7 +19,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 
-SCHEMA = 1
+SCHEMA = 2
 VCS_SUFFIXES = ("-git", "-svn", "-hg", "-bzr", "-cvs", "-fossil", "-darcs")
 NAME_RE = re.compile(r"^[A-Za-z0-9@._+\-]+$")
 FUNCTION_RE = re.compile(r"(?m)^[ \t]*(?:function\s+)?([A-Za-z_][A-Za-z_0-9]*)\s*(?:\(\s*\))?\s*\{")
@@ -201,53 +201,6 @@ def classify(srcinfo: str, pkgbuild: str, installed_package: str, installed_vers
     }
 
 
-def apply_override(entry: dict, override: dict | None) -> None:
-    if not override:
-        return
-    requested = override.get("monitor")
-    if not isinstance(requested, list) or not requested:
-        entry["reasons"].append("Ignored empty or malformed user override")
-        return
-    identities = {(s["alias"], s["url"], s["fragment"]) for s in entry["sources"] if s["supported"]}
-    selected: list[str] = []
-    for record in requested:
-        if not isinstance(record, dict) or (record.get("alias"), record.get("url"), record.get("fragment", "")) not in identities:
-            entry["reasons"].append("Stale override: source identity changed; review required")
-            return
-        if record["alias"] not in selected:
-            selected.append(record["alias"])
-    # A manual rule applies ONLY to exact source identities, never to guessed
-    # new repositories. An unknown installed baseline still forbids skipping.
-    entry["monitor"] = selected
-    entry["classification"] = "user-policy"
-    entry["reasons"].append("User selected monitored sources; installed baseline remains unknown")
-
-
-def regenerate(rows: list[dict], overrides: dict | None = None) -> dict:
-    policies: dict[str, dict] = {}
-    overrides = (overrides or {}).get("packages", {})
-    if not isinstance(overrides, dict):
-        raise ValueError("Invalid overrides: packages must be an object")
-    for row in rows:
-        name = row["package"]
-        if not NAME_RE.fullmatch(name) or not row.get("installed_version"):
-            raise ValueError("Invalid package name/version")
-        entry = classify(row["srcinfo"], row["pkgbuild"], name, row["installed_version"])
-        key = entry["packagebase"]
-        if key in policies and policies[key]["pkgbuild_sha256"] != entry["pkgbuild_sha256"]:
-            raise ValueError(f"Conflicting PKGBUILDs for package base {key}")
-        if key in policies:
-            policies[key]["installed_packages"].append(name)
-        else:
-            entry["installed_packages"] = [name]
-            # For packages we cannot unambiguously classify, honor only exact
-            # user-reviewed source identities; preserve the override file.
-            if entry["classification"] != "single-source":
-                apply_override(entry, overrides.get(key))
-            policies[key] = entry
-    return {"schema": SCHEMA, "purpose": "classification-only", "packages": dict(sorted(policies.items()))}
-
-
 def package_policy(row: dict) -> dict:
     """One editable policy per *installed package name*, including split packages.
 
@@ -282,7 +235,7 @@ def package_policy(row: dict) -> dict:
     if len(set(item["identity"] for item in entries)) != len(entries):
         info["reasons"].append("Duplicate source entries; review required")
     return {
-        "schema": 2,
+        "schema": SCHEMA,
         "package": name,
         "packagebase": info["packagebase"],
         "installed_version": version,
@@ -404,12 +357,19 @@ def write_package_policies(policies: dict[str, dict], output_dir: Path,
             action = "overwrite"
         actions.append({"package": name, "path": str(path), "action": action,
                         "warnings": warnings})
-        if dry_run or action.startswith("keep"):
-            continue
-        if action == "backup-and-overwrite":
-            actions[-1]["backup"] = str(backup_exact_file(path))
-        atomic_write_json(path, data)
-    return {"schema": 2, "purpose": "classification-only", "actions": actions,
+    # Validate all destination paths before doing any writes. The individual
+    # file replacements are atomic; full-directory writes are not transactional.
+    if not dry_run:
+        for plan in actions:
+            if plan["action"].startswith("keep"):
+                continue
+            path = Path(plan["path"])
+            if path.is_symlink():
+                raise ValueError("Policy path changed to symlink: " + str(path))
+            if plan["action"] == "backup-and-overwrite":
+                plan["backup"] = str(backup_exact_file(path))
+            atomic_write_json(path, policies[plan["package"]])
+    return {"schema": SCHEMA, "purpose": "classification-only", "actions": actions,
             "packages": policies}
 
 
