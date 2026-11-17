@@ -367,7 +367,9 @@ def run(sample: dict, *, output_dir: Path, delay: float = 0.2,
     (output_dir / 'results.json').write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
     with (output_dir / 'results.csv').open('w', newline='', encoding='utf-8') as stream:
         keys = ('round', 'package', 'packagebase', 'control', 'status',
-                'classification', 'review_required', 'source_count', 'git_sources',
+                'classification', 'source_identification_method',
+                'pkgver_source_reference_confirmed', 'review_required',
+                'source_count', 'git_sources',
                 'moving_git_sources', 'fixed_git_sources', 'n_sources', 'error')
         writer = csv.DictWriter(stream, fieldnames=keys, extrasaction='ignore')
         writer.writeheader()
