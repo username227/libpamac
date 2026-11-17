@@ -191,6 +191,12 @@ def srcdir_alias(expr: str) -> str | None:
 
 
 def classify(srcinfo: str, pkgbuild: str, installed_package: str, installed_version: str) -> dict:
+    """Identify the Git source separately from validating version semantics.
+
+    A sole *moving* Git source has a unique identity regardless of pkgver()
+    Bash syntax. That is NOT evidence that its remote HEAD corresponds to a
+    package upgrade. Version provenance/semantics remain a separate gate.
+    """
     pkgbase, raw_sources = parse_srcinfo(srcinfo)
     sources = [entry for raw in raw_sources if (entry := source_record(raw)) is not None]
     reasons: list[str] = []
@@ -210,31 +216,72 @@ def classify(srcinfo: str, pkgbuild: str, installed_package: str, installed_vers
         reasons.append("No statically accessible pkgver() function")
     if version_warnings or prepare_warnings:
         reasons.append("Packaging functions delegate to other shell code")
-    if len(referenced) != 1:
+
+    main: str | None = None
+    method = "unresolved"
+    pinned = False
+    if supported and len(sources) == 1:
+        sole = sources[0]
+        selector = sole["fragment"]
+        # A tag or commit is a *fixed* source, not a moving development HEAD.
+        if selector.startswith(("tag=", "commit=")) and selector.partition("=")[2]:
+            pinned = True
+            main = sole["alias"]
+            method = "sole-fixed-git-source"
+            reasons.append("Fixed Git tag or commit; remote branch movement is irrelevant")
+        elif (not selector or
+              (selector.startswith("branch=") and
+               re.fullmatch(r"[A-Za-z0-9._/+-]+", selector[len("branch="):]) and
+               not selector[len("branch="):].startswith(("-", "/")) and
+               "//" not in selector[len("branch="):] and
+               ".." not in selector[len("branch="):] and
+               not selector.endswith(("/", ".", ".lock")))):
+            main = sole["alias"]
+            method = "sole-moving-git-source"
+        else:
+            reasons.append("Unsupported or ambiguous Git revision selector")
+    elif supported and len(referenced) == 1:
+        main = referenced[0]
+        method = "pkgver-source-reference"
+
+    # This flag is evidence about the *source used by pkgver()*, not proof
+    # that pkgver can be evaluated without running a build or that the
+    # version of an installed binary corresponds to a Git commit.
+    pkgver_source_reference_confirmed = bool(
+        main and "pkgver" in funcs and len(referenced) == 1 and
+        referenced[0] == main and not version_warnings)
+    if main and not pkgver_source_reference_confirmed:
+        reasons.append("pkgver() source binding unverified; update detection requires review")
+    elif not main and len(referenced) != 1:
         reasons.append("Cannot unambiguously identify one version-bearing Git source")
-    main = referenced[0] if len(referenced) == 1 else None
+    elif main is None:
+        reasons.append("Git source selection remains unresolved")
+
     submodules: list[str] = []
-    # A positive hint only. `git config` in a helper or dead conditional is
-    # not proof of execution, and a branch may deliberately float sources.
+    # Submodule candidates are advisory; independent fetching is not authorized.
     if re.search(r"\bgit\s+submodule\s+(?:--\S+\s+)*update\b", prepare_body):
         for match in SUBMODULE_URL_RE.finditer(prepare_body):
             alias = srcdir_alias(match.group(2))
             if alias and alias in aliases and alias != main and alias not in submodules:
                 submodules.append(alias)
+
     status = "inconclusive"
     suggested: list[str] = []
-    if supported and main and not version_warnings and not prepare_warnings:
-        if len(sources) == 1:
+    if supported and main:
+        suggested = [main]
+        if pinned:
+            status = "fixed-source"
+        elif len(sources) == 1 and method == "sole-moving-git-source":
             status = "single-source"
-            suggested = [main]
-        elif len(submodules) == len(sources) - 1:
-            status = "submodule-candidate"
-            suggested = [main]
-            reasons.append("Submodule roles inferred from shell text; human review required")
-        else:
-            reasons.append("Secondary Git sources are not conclusively mapped to submodules")
-            suggested = [main]
-    # No installed hash is inferred from the current remote HEAD or pkgver.
+        elif not version_warnings and not prepare_warnings and pkgver_source_reference_confirmed:
+            if len(submodules) == len(sources) - 1:
+                status = "submodule-candidate"
+                reasons.append("Submodule roles inferred from shell text; human review required")
+            else:
+                reasons.append("Secondary Git sources are not conclusively mapped to submodules")
+        elif len(sources) > 1:
+            reasons.append("Multiple Git sources require further version/source review")
+
     return {
         "package": installed_package,
         "packagebase": pkgbase or installed_package,
@@ -244,6 +291,8 @@ def classify(srcinfo: str, pkgbuild: str, installed_package: str, installed_vers
         "pkgbuild_sha256": sha256(pkgbuild),
         "srcinfo_sha256": sha256(srcinfo),
         "classification": status,
+        "source_identification_method": method,
+        "pkgver_source_reference_confirmed": pkgver_source_reference_confirmed,
         "sources": sources,
         "suggested_monitor": suggested,
         "identified_submodules": sorted(submodules),
@@ -316,8 +365,14 @@ def package_policy(row: dict) -> dict:
         "gitmodules_provenance": (
             "metadata-snapshot-unverified" if remote_metadata else "not-inspected"),
         "classification": info["classification"],
+        "source_identification_method": info["source_identification_method"],
+        "pkgver_source_reference_confirmed": info["pkgver_source_reference_confirmed"],
         "sources": entries,
-        "review_required": info["classification"] != "single-source",
+        "review_required": (
+            info["classification"] != "single-source" or
+            not info["pkgver_source_reference_confirmed"] or
+            bool(info["reasons"]) or
+            bool(re.search(r"(?m)^\\s*source_[A-Za-z0-9_]+\\s*=", row["srcinfo"]))),
         "lightweight_check_enabled": False,
         "reasons": info["reasons"],
     }
