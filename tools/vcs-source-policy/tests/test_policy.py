@@ -85,6 +85,22 @@ configure_modules() {
         self.assertEqual(result['monitor'], [])
         self.assertTrue(any('Stale override' in x for x in result['reasons']))
 
+    def test_override_invalidated_if_git_branch_changes(self):
+        row = {'package': 'emulator-git', 'installed_version': 'r2.a-1',
+               'srcinfo': srcinfo(sources=(
+                   'emulator::git+https://example.org/emulator.git#branch=main',
+                   'other::git+https://example.org/other.git')),
+               'pkgbuild': SIMPLE}
+        overrides = {'packages': {'emulator-git': {'monitor': [
+            {'alias': 'emulator', 'url': 'https://example.org/emulator.git',
+             'fragment': 'branch=main'}]}}}
+        accepted = regenerate([row], overrides)['packages']['emulator-git']
+        self.assertEqual(accepted['monitor'], ['emulator'])
+        row['srcinfo'] = row['srcinfo'].replace('branch=main', 'branch=testing')
+        rejected = regenerate([row], overrides)['packages']['emulator-git']
+        self.assertEqual(rejected['monitor'], [])
+        self.assertEqual(rejected['classification'], 'inconclusive')
+
     def test_rebuild_fresh_without_preserving_old_package_entries(self):
         rows = [{'package': 'emulator-git', 'installed_version': 'r2.a-1',
                  'srcinfo': srcinfo(), 'pkgbuild': SIMPLE}]
