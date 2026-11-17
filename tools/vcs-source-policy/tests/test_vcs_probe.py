@@ -13,7 +13,9 @@ def policy(package='demo-git', classification='single-source', sources=None):
                     'role': 'primary-candidate', 'rebuild': 'Y'}]
     return {'packagebase': package, 'pkgbuild_sha256': 'c'*64,
             'installed_version': 'r4.abc0123-1',
-            'classification': classification, 'sources': sources}
+            'classification': classification, 'sources': sources,
+            'pkgver_source_reference_confirmed': True,
+            'review_required': False}
 
 ROW = {'package': 'demo-git', 'installed_version': 'r4.abc0123-1'}
 SHA = 'abc0123'+'f'*33
@@ -155,6 +157,49 @@ class ProbeTests(unittest.TestCase):
             raise RuntimeError('offline')
         result = assess_package(ROW, policy(), approve={}, query=failure)
         self.assertEqual(result['status'], 'error')
+
+
+    def test_single_source_known_but_unverified_pkgver_never_queries(self):
+        p = policy()
+        p['pkgver_source_reference_confirmed'] = False
+        p['review_required'] = True
+        result = assess_package(ROW, p, approve={},
+                                query=lambda _: self.fail(
+                                    'Unknown pkgver binding queried remote'))
+        self.assertEqual(result['status'], 'incomplete')
+        self.assertIn('pkgver()', result['reason'])
+
+    def test_single_source_requiring_review_never_queries(self):
+        p = policy()
+        p['review_required'] = True
+        result = assess_package(ROW, p, approve={},
+                                query=lambda _: self.fail(
+                                    'Unreviewed build contacted remote'))
+        self.assertEqual(result['status'], 'incomplete')
+
+    def test_pinned_source_classification_never_queries_remote(self):
+        p = policy(classification='fixed-source', sources=[
+            {'source': 'git+https://example.org/demo.git#commit=141648b',
+             'role': 'primary-candidate', 'rebuild': 'Y'}])
+        p['review_required'] = True
+        p['pkgver_source_reference_confirmed'] = False
+        result = assess_package(ROW, p, approve={},
+                                query=lambda _: self.fail(
+                                    'Pinned source triggered remote query'))
+        self.assertEqual(result['status'], 'pinned-source')
+        self.assertIsNone(result['remote_commit'])
+
+    def test_submodule_approved_still_requires_pkgver_source_binding(self):
+        p = policy(classification='submodule-metadata-candidate', sources=[
+            {'source': 'demo::git+https://github.com/owner/demo.git',
+             'role': 'primary-candidate', 'rebuild': 'Y'},
+            {'source': 'other::git+https://github.com/owner/other.git',
+             'role': 'submodule-candidate', 'rebuild': 'N'}])
+        p['pkgver_source_reference_confirmed'] = False
+        result = assess_package(ROW, p, approve={'demo-git': 'c'*64},
+                                query=lambda _: self.fail(
+                                    'Unbound pkgver queried even with module approval'))
+        self.assertEqual(result['status'], 'incomplete')
 
 
 if __name__ == '__main__':
