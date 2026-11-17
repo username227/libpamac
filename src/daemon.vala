@@ -825,7 +825,8 @@ namespace Pamac {
 					try {
 						new Thread<int>.try ("flatpak_trans_run", () => {
 							AtomicInt.inc (ref running_threads);
-							bool success = flatpak_plugin.trans_run (sender, to_install_copy, to_remove_copy, to_upgrade_copy);
+							bool success = flatpak_plugin.trans_run (sender, to_install_copy, to_remove_copy, to_upgrade_copy,
+								config.remove_unused_flatpak_deps);
 							flatpak_trans_run_finished (sender, success);
 							AtomicInt.dec_and_test (ref running_threads);
 							return 0;
