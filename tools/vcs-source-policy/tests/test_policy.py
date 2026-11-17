@@ -54,10 +54,14 @@ configure_modules() {
         self.assertEqual(result['monitor'], [])
         self.assertFalse(result['lightweight_check_enabled'])
 
-    def test_dynamic_external_pkgbuild_is_inconclusive(self):
+    def test_dynamic_external_pkgbuild_source_known_but_not_approved(self):
         text = SIMPLE + '\nprepare() {\n  source "$srcdir/dependency/PKGBUILD"\n}\n'
-        result = classify(srcinfo(), text, 'emulator-git', 'r5.x-1')
-        self.assertEqual(result['classification'], 'inconclusive')
+        result = package_policy({
+            'srcinfo': srcinfo(), 'pkgbuild': text,
+            'package': 'emulator-git', 'installed_version': 'r5.x-1'})
+        self.assertEqual(result['classification'], 'single-source')
+        self.assertEqual(result['source_identification_method'], 'sole-moving-git-source')
+        self.assertTrue(result['review_required'])
         self.assertFalse(result['lightweight_check_enabled'])
 
     def test_multiple_vcs_without_proven_submodule_relationship(self):
@@ -415,6 +419,83 @@ pkgver() {
         new = package_policy(changed)
         self.assertIn('Packaging metadata changed', validate_kept_policy(old, new))
 
+
+
+    def test_one_git_source_identified_even_when_pkgver_path_is_unparsed(self):
+        cases = [
+            ('verifytapn-git',
+             'verifytapn-git::git+https://github.com/TAPAAL/verifytapn.git',
+             'pkgname="verifytapn-git"\npkgver() {\n cd "$srcdir/$pkgname/"\n git rev-parse --short HEAD\n}\n'),
+            ('mmdvmcal-git',
+             'git+https://github.com/g4klx/MMDVMCal.git',
+             'pkgname=mmdvmcal-git\npkgver() {\n cd "$srcdir/${pkgname%-git}"\n git rev-parse HEAD\n}\n'),
+            ('mingw-w64-mesa-demos-git',
+             'git+https://gitlab.freedesktop.org/mesa/demos.git',
+             'pkgver() {\n cd "${srcdir}"/demos\n git rev-parse HEAD\n}\n'),
+            ('missing-pkgver-git',
+             'git+https://example.org/missing-pkgver.git',
+             'pkgname=missing-pkgver-git\nprepare() { :; }\n'),
+            ('date-pkgver-git',
+             'git+https://example.org/date-pkgver.git',
+             'pkgver() { date +%Y%m%d; }\n'),
+        ]
+        for name, source, script in cases:
+            with self.subTest(package=name):
+                info = classify(srcinfo(name=name, sources=(source,)),
+                                script, name, 'r1.abcdef0-1')
+                self.assertEqual(info['classification'], 'single-source')
+                self.assertEqual(info['source_identification_method'],
+                                 'sole-moving-git-source')
+                self.assertEqual(len(info['suggested_monitor']), 1)
+                self.assertFalse(info['pkgver_source_reference_confirmed'])
+                row = package_policy({'package': name, 'installed_version': 'r1.abcdef0-1',
+                                      'pkgbuild': script, 'srcinfo': srcinfo(
+                                          name=name, sources=(source,))})
+                self.assertTrue(row['review_required'])
+                self.assertFalse(row['lightweight_check_enabled'])
+
+    def test_known_pkgver_binding_keeps_single_source_review_clear(self):
+        row = package_policy({'package': 'emulator-git',
+                              'installed_version': 'r14.aabbcc-1',
+                              'pkgbuild': SIMPLE, 'srcinfo': srcinfo()})
+        self.assertEqual(row['classification'], 'single-source')
+        self.assertTrue(row['pkgver_source_reference_confirmed'])
+        self.assertFalse(row['review_required'])
+        self.assertFalse(row['lightweight_check_enabled'])
+
+    def test_fixed_git_commit_and_tag_not_misidentified_as_moving(self):
+        for fragment in ('commit=141648b', 'tag=v1.0'):
+            with self.subTest(fragment=fragment):
+                source = 'repo::git+https://github.com/example/repo.git#' + fragment
+                script = 'pkgver() {\n cd repo\n git describe --long\n}\n'
+                row = package_policy({
+                    'package': 'repo-git', 'installed_version': '1.0-1',
+                    'pkgbuild': script, 'srcinfo': srcinfo(
+                        name='repo-git', sources=(source,))})
+                self.assertEqual(row['classification'], 'fixed-source')
+                self.assertEqual(row['source_identification_method'],
+                                 'sole-fixed-git-source')
+                self.assertTrue(row['review_required'])
+                self.assertFalse(row['lightweight_check_enabled'])
+
+    def test_unknown_git_fragment_is_not_a_confident_moving_source(self):
+        source = 'repo::git+https://example.org/repo.git#something=unrecognized'
+        row = classify(srcinfo(name='repo-git', sources=(source,)),
+                       'pkgver() { cd repo; git describe; }',
+                       'repo-git', 'r1.abc-1')
+        self.assertEqual(row['classification'], 'inconclusive')
+        self.assertEqual(row['suggested_monitor'], [])
+        self.assertFalse(row['lightweight_check_enabled'])
+
+    def test_architecture_qualified_source_requires_review(self):
+        text = srcinfo() + '\tsource_x86_64 = somearch-specific.patch\n'
+        row = package_policy({'package': 'emulator-git',
+                              'installed_version': 'r14.aabbcc-1',
+                              'pkgbuild': SIMPLE, 'srcinfo': text})
+        self.assertEqual(row['classification'], 'single-source')
+        self.assertTrue(row['pkgver_source_reference_confirmed'])
+        self.assertTrue(row['review_required'])
+        self.assertFalse(row['lightweight_check_enabled'])
 
 
 if __name__ == '__main__':
