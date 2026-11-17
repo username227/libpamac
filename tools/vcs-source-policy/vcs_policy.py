@@ -126,13 +126,60 @@ def reachable_bodies(funcs: dict[str, str], root: str) -> tuple[str, list[str]]:
     return body, sorted(missing)
 
 
-def path_reference(body: str, alias: str) -> bool:
-    escaped = re.escape(alias)
-    path = r"(?:\$\{srcdir\}|\$srcdir)/" + escaped + r"(?=['\"\s;/]|$)"
-    # A literal cwd in pkgver() or `git -C` is convincing evidence of the
-    # version-bearing repository; arbitrary alias mentions are NOT.
-    return bool(re.search(r"\bcd\s+['\"]?" + path, body) or
-                re.search(r"\bgit\s+-C\s+['\"]?" + path, body))
+# Common PKGBUILDs use a relative cd or a constant such as _pkgname=foo.
+# These are advisory static hints, not an attempt to interpret Bash.
+LITERAL_ASSIGN_RE = re.compile(
+    r"""(?m)^[ \t]*(?:export[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"$\x60\\]*)"|'([^'$\x60\\]*)'|([A-Za-z0-9@._+\-]+))[ \t]*(?:#.*)?$"""
+)
+STATIC_PATH_RE = re.compile(
+    r"""(?<![\w])(?:cd|git[ \t]+-C)[ \t]+(?P<q>["']?)(?P<arg>[^"'\s;]+)(?P=q)(?=\s|;|$)"""
+)
+SIMPLE_VAR_RE = re.compile(r"\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))")
+
+
+def static_assignments(pkgbuild: str) -> dict[str, str]:
+    values: dict[str, list[str]] = {}
+    for match in LITERAL_ASSIGN_RE.finditer(pkgbuild):
+        name = match.group(1)
+        value = next((item for item in match.groups()[1:] if item is not None), "")
+        values.setdefault(name, []).append(value)
+    # Multiple assignments may be conditional or mutated. Refuse to guess.
+    return {key: value[0] for key, value in values.items()
+            if len(value) == 1 and NAME_RE.fullmatch(value[0])}
+
+
+def literal_checkout_path(path: str, variables: dict[str, str]) -> str | None:
+    path = path.replace("$" + "{srcdir}", "$srcdir")
+    if path.startswith("$srcdir/"):
+        path = path[len("$srcdir/"):]
+    elif path.startswith("$srcdir"):
+        # The source root itself does not identify the version-bearing repo.
+        return None
+
+    unknown = False
+
+    def substitute(match: re.Match) -> str:
+        nonlocal unknown
+        name = match.group(1) or match.group(2)
+        if name not in variables:
+            unknown = True
+            return ""
+        return variables[name]
+
+    result = SIMPLE_VAR_RE.sub(substitute, path)
+    if unknown or "$" in result or "/" in result or not NAME_RE.fullmatch(result):
+        return None
+    return result
+
+
+def path_reference(body: str, alias: str, variables: dict[str, str] | None = None) -> bool:
+    # Only exact source checkout names are accepted; arbitrary mentions,
+    # computed expressions and dynamic shell logic remain inconclusive.
+    for match in STATIC_PATH_RE.finditer(body):
+        target = literal_checkout_path(match.group("arg"), variables or {})
+        if target == alias:
+            return True
+    return False
 
 
 def srcdir_alias(expr: str) -> str | None:
@@ -148,7 +195,9 @@ def classify(srcinfo: str, pkgbuild: str, installed_package: str, installed_vers
     funcs = parse_function_bodies(pkgbuild)
     version_body, version_warnings = reachable_bodies(funcs, "pkgver")
     prepare_body, prepare_warnings = reachable_bodies(funcs, "prepare")
-    referenced = [alias for alias in aliases if path_reference(version_body, alias)]
+    constants = static_assignments(pkgbuild)
+    referenced = [alias for alias in aliases
+                  if path_reference(version_body, alias, constants)]
     supported = all(s["supported"] for s in sources) and len(set(aliases)) == len(aliases)
     if not supported:
         reasons.append("Git source URL or alias cannot be safely identified")
