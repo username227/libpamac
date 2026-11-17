@@ -207,10 +207,10 @@ def apply_override(entry: dict, override: dict | None) -> None:
     if not isinstance(requested, list) or not requested:
         entry["reasons"].append("Ignored empty or malformed user override")
         return
-    identities = {(s["alias"], s["url"]) for s in entry["sources"] if s["supported"]}
+    identities = {(s["alias"], s["url"], s["fragment"]) for s in entry["sources"] if s["supported"]}
     selected: list[str] = []
     for record in requested:
-        if not isinstance(record, dict) or (record.get("alias"), record.get("url")) not in identities:
+        if not isinstance(record, dict) or (record.get("alias"), record.get("url"), record.get("fragment", "")) not in identities:
             entry["reasons"].append("Stale override: source identity changed; review required")
             return
         if record["alias"] not in selected:
