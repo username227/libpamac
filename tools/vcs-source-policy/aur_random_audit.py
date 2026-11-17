@@ -188,6 +188,8 @@ def audit_one(package_name: str, packagebase: str, pkgbuild: str, srcinfo: str,
         red_flags.append('unsupported-or-ambiguous-git-fragment')
     if not git_sources:
         red_flags.append('no-git-source-or-unhandled-VCS')
+    if re.search(r'(?m)^\s*source_[A-Za-z0-9_]+\s*=', srcinfo):
+        red_flags.append('architecture-qualified-sources')
     if p['lightweight_check_enabled']:
         raise ValueError('Safety violation: classifier enabled lightweight check')
     if n_sources and not p['review_required']:
@@ -267,7 +269,11 @@ def run(sample: dict, *, output_dir: Path, delay: float = 0.2,
         if base not in metadata_cache:
             try:
                 if offline_dir is None:
-                    pkgbuild, srcinfo, archive_sha = snapshot_packagebase(base)
+                    try:
+                        pkgbuild, srcinfo, archive_sha = snapshot_packagebase(base)
+                    finally:
+                        # A missing/blocked snapshot must not cause a burst of retries.
+                        time.sleep(delay)
                     directory = output_dir / 'packaging' / base
                     directory.mkdir(parents=True, exist_ok=True)
                     (directory / 'PKGBUILD').write_text(pkgbuild)
@@ -276,7 +282,6 @@ def run(sample: dict, *, output_dir: Path, delay: float = 0.2,
                     (directory / 'text-hashes.json').write_text(json.dumps({
                         'pkgbuild': sha256(pkgbuild), 'srcinfo': sha256(srcinfo)},
                         sort_keys=True) + '\n')
-                    time.sleep(delay)
                 else:
                     directory = offline_dir / 'packaging' / base
                     pkgbuild = (directory / 'PKGBUILD').read_text()
