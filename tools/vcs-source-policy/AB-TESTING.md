@@ -1,9 +1,13 @@
 # Legacy Pamac versus lightweight VCS checker — A/B validation
 
 **Research-only harness.** `ab_compare.py` compares two previously captured
-JSON snapshots. It does **not** execute either checker, query Git, write to
-Pamac state, touch AUR directories, build or install packages. Neither the
-legacy capture adapter nor the new lightweight checker is implemented yet.
+JSON snapshots; it does **not** run either checker or change Pamac state.
+A separate `vcs_probe.py` now performs metadata-only Git ref observations
+using `git ls-remote`. `ab_observe.py` can compare these observations to
+saved Pamac `checkupdates --aur --devel --quiet` output, without triggering
+a second source refresh. **Neither tool claims validated upgrade decisions.**
+The evidence-producing adapters required for strict A/B equivalence and
+installed build provenance are still unimplemented.
 
 ## Why compare both
 
@@ -101,7 +105,10 @@ comparison.
 
 ## Further work
 
-- Implement **read-only, non-mutating capture adapters** for both methods.
+- Extend the initial read-only Git ref probe into a validated update checker,
+  including exact installed build provenance and candidate pkgver generation.
+- Implement **comparable evidence capture adapters** for the legacy and new
+  methods; saved quiet output alone is not equivalent remote-state evidence.
 - Capture truly comparable frozen/observed source and packaging state.
 - Compare results over a representative real AUR corpus and multiple runs.
 - Add disk/network/time telemetry with explicit opt-in caps and source-cache
