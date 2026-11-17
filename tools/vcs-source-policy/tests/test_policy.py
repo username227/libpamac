@@ -322,7 +322,7 @@ pkgver() {
                         text, 'myapp-git', 'r42.a-1')
         self.assertEqual(item['classification'], 'single-source')
 
-    def test_unknown_or_reassigned_variable_is_inconclusive(self):
+    def test_unknown_or_reassigned_pkgver_variable_does_not_hide_sole_git_identity(self):
         original = srcinfo(name='myapp-git',
                            sources=('git+https://example.org/myapp.git',))
         unknown = '''pkgver() {
