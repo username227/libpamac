@@ -498,5 +498,36 @@ pkgver() {
         self.assertFalse(row['lightweight_check_enabled'])
 
 
+    def test_one_git_plus_other_vcs_does_not_allow_unreviewed_probe(self):
+        text = srcinfo(sources=(
+            'emulator::git+https://example.org/emulator.git',
+            'hg+https://example.org/second-hg-source',
+        ))
+        row = package_policy({'package': 'emulator-git',
+                              'installed_version': 'r14.aabbcc-1',
+                              'pkgbuild': SIMPLE, 'srcinfo': text})
+        self.assertEqual(row['classification'], 'single-source')
+        self.assertEqual(row['source_identification_method'],
+                         'sole-moving-git-source')
+        self.assertTrue(row['review_required'])
+        self.assertIn('Additional non-Git VCS source needs independent review',
+                      row['reasons'])
+
+    def test_single_git_with_floating_submodules_requires_review(self):
+        script = SIMPLE + '''
+prepare() {
+  cd "$srcdir/emulator"
+  git submodule update --init --remote
+}
+'''
+        row = package_policy({'package': 'emulator-git',
+                              'installed_version': 'r14.aabbcc-1',
+                              'pkgbuild': script, 'srcinfo': srcinfo()})
+        self.assertEqual(row['classification'], 'single-source')
+        self.assertTrue(row['pkgver_source_reference_confirmed'])
+        self.assertTrue(row['review_required'])
+        self.assertFalse(row['lightweight_check_enabled'])
+
+
 if __name__ == '__main__':
     unittest.main()
