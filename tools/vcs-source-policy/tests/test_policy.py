@@ -532,5 +532,18 @@ prepare() {
         self.assertFalse(row['lightweight_check_enabled'])
 
 
+    def test_old_saved_policy_without_new_analysis_fields_is_stale(self):
+        row = {'package': 'emulator-git', 'installed_version': 'r14.aabbcc-1',
+               'pkgbuild': SIMPLE, 'srcinfo': srcinfo()}
+        proposed = package_policy(row)
+        old = dict(proposed)
+        old.pop('source_identification_method')
+        old.pop('pkgver_source_reference_confirmed')
+        self.assertIn('Source classification changed; recreate or review policy',
+                      validate_kept_policy(old, proposed))
+        current = dict(proposed)
+        self.assertEqual(validate_kept_policy(current, proposed), [])
+
+
 if __name__ == '__main__':
     unittest.main()
