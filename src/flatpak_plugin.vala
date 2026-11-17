@@ -805,7 +805,35 @@ namespace Pamac {
 			emit_error (sender, message, details);
 		}
 
-		public bool trans_run (string sender, string[] to_install, string[] to_remove, string[] to_upgrade) {
+		// Match the full "flatpak uninstall --unused" policy, rather than
+		// the transaction's narrower automatic end-of-life runtime cleanup.
+		// Query only AFTER a successful uninstall so Flatpak evaluates
+		// dependencies against the resulting installed application set.
+		bool remove_unused_dependencies () {
+			try {
+				GenericArray<unowned Flatpak.InstalledRef> unused_refs =
+					installation.list_unused_refs (null, cancellable);
+				if (unused_refs.length == 0) {
+					return true;
+				}
+				var cleanup = new Flatpak.Transaction.for_installation (installation, cancellable);
+				foreach (unowned Flatpak.InstalledRef unused_ref in unused_refs) {
+					cleanup.add_uninstall (unused_ref.format_ref ());
+				}
+				do_emit_script_output (dgettext (null,
+					"Removing unused Flatpak runtimes and extensions") + "...");
+				cleanup.ready.connect (() => { return true; });
+				cleanup.new_operation.connect (on_new_operation);
+				cleanup.operation_error.connect (on_operation_error);
+				return cleanup.run (cancellable);
+			} catch (Error e) {
+				do_emit_error (dgettext (null, "Flatpak unused dependency cleanup failed"),
+					{e.message});
+				return false;
+			}
+		}
+
+		public bool trans_run (string sender, string[] to_install, string[] to_remove, string[] to_upgrade, bool remove_unused_deps) {
 			this.sender = sender;
 			cancellable.reset ();
 			try {
@@ -850,6 +878,12 @@ namespace Pamac {
 				transaction.new_operation.connect (on_new_operation);
 				transaction.operation_error.connect (on_operation_error);
 				bool success = transaction.run (cancellable);
+				// Only an explicit application removal triggers cleanup. A
+				// standard install/upgrade must leave unrelated runtimes alone.
+				// A failed uninstall never schedules dependency cleanup.
+				if (success && remove_unused_deps && to_remove.length > 0) {
+					success = remove_unused_dependencies ();
+				}
 				refresh ();
 				return success;
 			} catch (Error e) {
