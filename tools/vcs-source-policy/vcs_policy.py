@@ -411,6 +411,11 @@ def validate_kept_policy(existing: dict, proposed: dict) -> list[str]:
             existing.get("pkgbuild_sha256") != proposed["pkgbuild_sha256"] or
             existing.get("gitmodules_sha256") != proposed["gitmodules_sha256"]):
         reasons.append("Packaging metadata changed")
+    if (existing.get("classification") != proposed["classification"] or
+            existing.get("source_identification_method") != proposed["source_identification_method"] or
+            existing.get("pkgver_source_reference_confirmed") != proposed["pkgver_source_reference_confirmed"] or
+            existing.get("review_required") != proposed["review_required"]):
+        reasons.append("Source classification changed; recreate or review policy")
     old_sources = existing.get("sources")
     if not isinstance(old_sources, list):
         return reasons + ["Missing source list"]
