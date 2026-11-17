@@ -238,21 +238,26 @@ class RandomAuditTests(unittest.TestCase):
 
 
     def test_audit_counts_source_identity_and_pkgver_binding_separately(self):
-        source = ('pkgbase = example-git\n'
-                  'source = example::git+https://example.org/example.git\n'
-                  'pkgname = example-git\n')
-        row = audit.audit_one(
-            'example-git', 'example-git',
-            'pkgname=example-git\npkgver() {\n cd "DOLLAR{srcdir}/DOLLAR{pkgname}/"\n git rev-parse HEAD\n}\n'.replace('DOLLAR', '
-    unittest.main()),
-            source, round_num=1)
-        # A standalone isolated audit-test stub may lack the enhanced policy,
-        # whereas the complete repository must return the distinct fields.
-        self.assertIn('source_identification_method', row)
-        self.assertIn('pkgver_source_reference_confirmed', row)
+        source = ('pkgbase = example-git\\n'
+                  'source = example::git+https://example.org/example.git\\n'
+                  'pkgname = example-git\\n')
+        script = '''pkgname=example-git
+pkgver() {
+  cd "$srcdir/$pkgname/"
+  git rev-parse HEAD
+}
+'''
+        row = audit.audit_one('example-git', 'example-git', script,
+                              source, round_num=1)
+        self.assertEqual(row['classification'], 'single-source')
+        self.assertEqual(row['source_identification_method'],
+                         'sole-moving-git-source')
+        self.assertFalse(row['pkgver_source_reference_confirmed'])
+        self.assertTrue(row['review_required'])
+        self.assertFalse(row['lightweight_check_enabled'])
         counts = audit.summarize([row])
-        self.assertIn('sole_moving_git_source_identified', counts['overall'])
-        self.assertIn('pkgver_source_reference_confirmed', counts['overall'])
+        self.assertEqual(counts['overall']['sole_moving_git_source_identified'], 1)
+        self.assertEqual(counts['overall']['pkgver_source_reference_confirmed'], 0)
         self.assertEqual(counts['overall']['auto_authorized_lightweight_checks'], 0)
 
 
