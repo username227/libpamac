@@ -117,6 +117,59 @@ An optional offline fixture manifest can specify a `"gitmodules"` path
 alongside `"pkgbuild"` and `"srcinfo"`. Changes in inspected `.gitmodules`
 content invalidate existing kept-file fingerprints.
 
+## Read-only primary Git revision probe (research)
+
+`vcs_probe.py` now queries primary Git refs using **only `git ls-remote`**.
+It deliberately never calls `git fetch`, `git clone`, `makepkg`, checkout,
+build or install. Remote queries have a 12-second default timeout each and
+no interactive credential prompts. Only HTTPS and Git protocol URLs are
+accepted; fixed `#tag=` and `#commit=` selectors do not trigger HEAD checks.
+
+    python3 tools/vcs-source-policy/vcs_probe.py \
+      --installed --inspect-gitmodules \
+      --output /tmp/pamac-vcs-remote-probe.json
+
+    jq -r '.packages[] | [.package, .status, (.reported_installed_commit // "-"), (.remote_commit // "-")] | @tsv' \
+      /tmp/pamac-vcs-remote-probe.json
+
+Possible statuses are `remote-match`, `remote-difference`, `pinned-source`,
+`incomplete`, and `error`. **None is a verified package upgrade decision.**
+The abbreviated commit in `pacman -Q`'s installed version is only a hint:
+we cannot assume it identifies the binaries actually installed or that
+the AUR PKGBUILD has not changed since installation. A remote difference
+does not prove ancestry or the candidate `pkgver`.
+
+For multi-Git packages, even matching `.gitmodules` URLs are insufficient:
+explicit review must be tied to the exact currently fetched PKGBUILD hash.
+A research-only opt-in can use `--reviewed-submodule
+PACKAGE=PKGBUILD_SHA256` (repeatable); it must be withheld if the file has
+changed or its `prepare()` behavior remains uncertain. Even approved
+probes remain *observations only*. No persistent JSON is created by the probe.
+
+## Exploratory comparison with existing Pamac output
+
+`ab_observe.py` parses **saved** output of the existing
+`pamac checkupdates --aur --devel --quiet` command and compares it with
+remote observations. It does not run Pamac or make a network request.
+A complete Pamac check exits 0 (no updates) or 100 (updates);
+101–103 indicate incomplete checks. Preserve the original exit code.
+
+    python3 tools/vcs-source-policy/ab_observe.py \
+      --probe /tmp/pamac-vcs-remote-probe.json \
+      --legacy-stdout /tmp/pamac-vcs-legacy.txt \
+      --legacy-exit-code 100 \
+      --output /tmp/pamac-vcs-ab-observations.json
+
+The example exit status `100` must be replaced by the *actual* captured
+status. If no saved legacy output exists, do **not** initiate a costly VCS
+source-refresh scan just to obtain one. The comparison is diagnostic, with
+`strictly_comparable=false` and `validated_ab_pass=false` by design.
+
+The original strict `ab_compare.py` still requires truly equal remote,
+packaging, installed and configuration evidence. Neither the probe nor the
+saved CLI-output importer can provide that equivalence by themselves.
+No production libpamac changes are authorized by these reports.
+
 ## Analysis and testing
 
     python3 tools/vcs-source-policy/vcs_policy.py analyze \
