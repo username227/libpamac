@@ -280,5 +280,65 @@ setup_modules() {
 
 
 
+    def test_arch_guideline_relative_pkgname_checkout(self):
+        text = '''pkgname=bluez-git
+source=("bluez-git::git://git.kernel.org/pub/scm/bluetooth/bluez.git")
+pkgver() {
+  cd "$pkgname"
+  git describe --long
+}
+'''
+        item = classify(srcinfo(name='bluez-git',
+                        sources=('bluez-git::git://git.kernel.org/pub/scm/bluetooth/bluez.git',)),
+                        text, 'bluez-git', 'r42.a-1')
+        self.assertEqual(item['classification'], 'single-source')
+        self.assertEqual(item['suggested_monitor'], ['bluez-git'])
+
+    def test_literal_private_pkgname_checkout(self):
+        text = '''pkgname=paru-git
+_pkgname=paru
+pkgver() {
+  cd "$srcdir/$_pkgname"
+  git describe --long
+}
+'''
+        item = classify(srcinfo(name='paru-git',
+                        sources=('git+https://github.com/morganamilo/paru',)),
+                        text, 'paru-git', 'r42.a-1')
+        self.assertEqual(item['classification'], 'single-source')
+        self.assertEqual(item['suggested_monitor'], ['paru'])
+
+    def test_direct_literal_git_c_checkout(self):
+        text = '''pkgver() {
+  git -C "myapp" rev-parse HEAD
+}
+'''
+        item = classify(srcinfo(name='myapp-git',
+                        sources=('myapp::git+https://example.org/myapp.git',)),
+                        text, 'myapp-git', 'r42.a-1')
+        self.assertEqual(item['classification'], 'single-source')
+
+    def test_unknown_or_reassigned_variable_is_inconclusive(self):
+        original = srcinfo(name='myapp-git',
+                           sources=('git+https://example.org/myapp.git',))
+        unknown = '''pkgver() {
+  cd "$_dynamic"
+  git rev-parse HEAD
+}
+'''
+        item = classify(original, unknown, 'myapp-git', 'r42.a-1')
+        self.assertEqual(item['classification'], 'inconclusive')
+        reassigned = '''_repo=myapp
+_repo=other
+pkgver() {
+  cd "$_repo"
+  git rev-parse HEAD
+}
+'''
+        item = classify(original, reassigned, 'myapp-git', 'r42.a-1')
+        self.assertEqual(item['classification'], 'inconclusive')
+
+
+
 if __name__ == '__main__':
     unittest.main()
