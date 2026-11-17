@@ -7,6 +7,7 @@ This tool does NOT decide upgrades or change libpamac's normal checker.
 from __future__ import annotations
 
 import argparse
+import configparser
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -18,6 +19,8 @@ import sys
 import tempfile
 import urllib.parse
 import urllib.request
+
+import submodule_metadata
 
 SCHEMA = 2
 VCS_SUFFIXES = ("-git", "-svn", "-hg", "-bzr", "-cvs", "-fossil", "-darcs")
@@ -264,6 +267,23 @@ def package_policy(row: dict) -> dict:
     _, raw_sources = parse_srcinfo(row["srcinfo"])
     primary = set(info["suggested_monitor"])
     submodules = set(info["identified_submodules"])
+    remote_metadata = row.get("gitmodules")
+    metadata_matches: set[str] = set()
+    if remote_metadata:
+        try:
+            if len(info["suggested_monitor"]) == 1:
+                metadata_matches = submodule_metadata.find_submodule_matches(
+                    info["suggested_monitor"][0], info["sources"],
+                    remote_metadata)
+        except (ValueError, configparser.Error):
+            info["reasons"].append("Invalid parent .gitmodules metadata; disregarded")
+            remote_metadata = None
+    if metadata_matches:
+        submodules.update(metadata_matches)
+        info["classification"] = "submodule-metadata-candidate"
+        info["reasons"].append(
+            "Matching .gitmodules URLs are advisory: verify PKGBUILD pinning "
+            "and absence of independent --remote updates before enabling checks")
     entries: list[dict] = []
     for raw in raw_sources:
         git = source_record(raw)
@@ -292,6 +312,9 @@ def package_policy(row: dict) -> dict:
         "installed_revision_provenance": "unknown",
         "pkgbuild_sha256": info["pkgbuild_sha256"],
         "srcinfo_sha256": info["srcinfo_sha256"],
+        "gitmodules_sha256": sha256(remote_metadata) if remote_metadata else None,
+        "gitmodules_provenance": (
+            "metadata-snapshot-unverified" if remote_metadata else "not-inspected"),
         "classification": info["classification"],
         "sources": entries,
         "review_required": info["classification"] != "single-source",
@@ -321,7 +344,8 @@ def validate_kept_policy(existing: dict, proposed: dict) -> list[str]:
     if existing.get("schema") != 2 or existing.get("package") != proposed["package"]:
         return ["Wrong schema or package identity"]
     if (existing.get("srcinfo_sha256") != proposed["srcinfo_sha256"] or
-            existing.get("pkgbuild_sha256") != proposed["pkgbuild_sha256"]):
+            existing.get("pkgbuild_sha256") != proposed["pkgbuild_sha256"] or
+            existing.get("gitmodules_sha256") != proposed["gitmodules_sha256"]):
         reasons.append("Packaging metadata changed")
     old_sources = existing.get("sources")
     if not isinstance(old_sources, list):
@@ -507,6 +531,9 @@ def main(argv: list[str] | None = None) -> int:
     regen.add_argument("--existing", choices=("keep", "overwrite", "backup"),
                        default="keep",
                        help="Keep existing files (default), overwrite, or back up then overwrite")
+    regen.add_argument("--inspect-gitmodules", action="store_true",
+                       help="Fetch limited current GitHub .gitmodules metadata for "
+                            "multi-Git packages; results remain advisory")
     regen.add_argument("--dry-run", action="store_true",
                        help="Preview every package and file action; do not write")
     args = parser.parse_args(argv)
@@ -522,8 +549,29 @@ def main(argv: list[str] | None = None) -> int:
                 rows = [{"package": item["package"],
                          "installed_version": item["installed_version"],
                          "srcinfo": Path(item["srcinfo"]).read_text(),
-                         "pkgbuild": Path(item["pkgbuild"]).read_text()}
+                         "pkgbuild": Path(item["pkgbuild"]).read_text(),
+                         "gitmodules": Path(item["gitmodules"]).read_text()
+                         if item.get("gitmodules") else None}
                         for item in manifest["packages"]]
+            if args.inspect_gitmodules:
+                metadata_cache = {}
+                for row in rows:
+                    if row.get("gitmodules") is not None:
+                        continue
+                    info = classify(row["srcinfo"], row["pkgbuild"],
+                                    row["package"], row["installed_version"])
+                    if len(info["suggested_monitor"]) != 1 or len(info["sources"]) < 2:
+                        continue
+                    main = info["suggested_monitor"][0]
+                    source = next((x for x in info["sources"]
+                                   if x["alias"] == main and x["supported"]), None)
+                    if source is None:
+                        continue
+                    key = (source["url"], source["fragment"])
+                    if key not in metadata_cache:
+                        metadata_cache[key] = submodule_metadata.github_metadata_for_primary(
+                            source["url"], source["fragment"])
+                    row["gitmodules"] = metadata_cache[key]
             policies = package_policies(rows)
             output = write_package_policies(policies, args.output_dir, args.existing,
                                             args.dry_run)
