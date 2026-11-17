@@ -91,7 +91,11 @@ def github_metadata_for_primary(url: str, fragment: str = "") -> str | None:
         document = json.loads(document_bytes)
         if document.get("encoding") != "base64":
             return None
-        raw = base64.b64decode(document["content"], validate=True)
+        encoded_content = document["content"]
+        if not isinstance(encoded_content, str):
+            return None
+        # GitHub's contents API wraps base64 in newline-separated chunks.
+        raw = base64.b64decode("".join(encoded_content.split()), validate=True)
         if len(raw) > 131_072:
             return None
         data = raw.decode("utf-8")
