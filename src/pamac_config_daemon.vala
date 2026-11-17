@@ -33,6 +33,7 @@ namespace Pamac {
 		public bool support_flatpak{ get; set; }
 		public bool enable_flatpak { get; set; }
 		public bool check_flatpak_updates { get; set; }
+		public bool remove_unused_flatpak_deps { get; set; }
 		PluginLoader<FlatpakPlugin> flatpak_plugin_loader;
 		public string aur_build_dir { get; set; }
 		public bool check_aur_updates { get; set; }
@@ -84,6 +85,7 @@ namespace Pamac {
 			enable_appstream = true;
 			enable_snap = false;
 			enable_flatpak = false;
+			remove_unused_flatpak_deps = false;
 			aur_build_dir = "/var/tmp";
 			max_parallel_downloads = 1;
 			offline_upgrade = false;
@@ -160,6 +162,8 @@ namespace Pamac {
 							enable_snap = true;
 						} else if (key == "EnableFlatpak") {
 							enable_flatpak = true;
+						} else if (key == "RemoveUnusedFlatpakDeps") {
+							remove_unused_flatpak_deps = true;
 						} else if (key == "OfflineUpgrade") {
 							offline_upgrade = true;
 						} else if (key == "MaxParallelDownloads") {
@@ -329,6 +333,15 @@ namespace Pamac {
 								data.append (line);
 								data.append ("\n");
 							}
+						} else if (line.contains ("RemoveUnusedFlatpakDeps")) {
+							if (new_conf.lookup_extended ("RemoveUnusedFlatpakDeps", null, out variant)) {
+								data.append (variant.get_boolean () ?
+									"RemoveUnusedFlatpakDeps\n" : "#RemoveUnusedFlatpakDeps\n");
+								new_conf.remove ("RemoveUnusedFlatpakDeps");
+							} else {
+								data.append (line);
+								data.append ("\n");
+							}
 						} else if (line.contains ("BuildDirectory")) {
 							if (new_conf.lookup_extended ("BuildDirectory", null, out variant)) {
 								data.append ("BuildDirectory = %s\n".printf (variant.get_string ()));
@@ -477,6 +490,9 @@ namespace Pamac {
 						} else {
 							data.append ("#CheckFlatpakUpdates\n\n");
 						}
+					} else if (key == "RemoveUnusedFlatpakDeps") {
+						data.append (val.get_boolean () ?
+							"RemoveUnusedFlatpakDeps\n\n" : "#RemoveUnusedFlatpakDeps\n\n");
 					} else if (key == "BuildDirectory") {
 						data.append ("BuildDirectory = %s\n\n".printf (val.get_string ()));
 					} else if (key == "CheckAURUpdates") {
