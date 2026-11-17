@@ -214,6 +214,15 @@ A fully offline fixture manifest can replace --installed:
 
 Run regenerate --manifest /path/to/manifest.json --dry-run.
 
+## Correctness review from the 650-package corpus
+
+[CORRECTNESS-REVIEW-2026-11-17.md](CORRECTNESS-REVIEW-2026-11-17.md)
+records the 38 remaining inconclusive development packages, a reproducible
+30-package spot check, independent Git dependencies, mutable-tag/all-ref
+versioning risks, and the minimal build-time provenance requirements.
+**The 92.7% single-source rate is identity coverage, not validated upgrade
+coverage.** Do not enable no-update decisions from HEAD equality alone.
+
 ## Sole Git source identification versus update-check readiness
 
 A PKGBUILD with **exactly one supported moving Git source** now receives
