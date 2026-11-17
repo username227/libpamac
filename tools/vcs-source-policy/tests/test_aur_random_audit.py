@@ -238,9 +238,9 @@ class RandomAuditTests(unittest.TestCase):
 
 
     def test_audit_counts_source_identity_and_pkgver_binding_separately(self):
-        source = ('pkgbase = example-git\\n'
-                  'source = example::git+https://example.org/example.git\\n'
-                  'pkgname = example-git\\n')
+        source = ('pkgbase = example-git\n'
+                  'source = example::git+https://example.org/example.git\n'
+                  'pkgname = example-git\n')
         script = '''pkgname=example-git
 pkgver() {
   cd "$srcdir/$pkgname/"
