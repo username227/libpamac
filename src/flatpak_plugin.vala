@@ -824,7 +824,12 @@ namespace Pamac {
 					"Removing unused Flatpak runtimes and extensions") + "...");
 				cleanup.ready.connect (() => { return true; });
 				cleanup.new_operation.connect (on_new_operation);
-				cleanup.operation_error.connect (on_operation_error);
+				// Unlike ordinary Flatpak update operations, a failed
+				// cleanup must not be silently treated as a success.
+				cleanup.operation_error.connect ((operation, error, detail) => {
+					do_emit_script_output (error.message);
+					return false;
+				});
 				return cleanup.run (cancellable);
 			} catch (Error e) {
 				do_emit_error (dgettext (null, "Flatpak unused dependency cleanup failed"),
