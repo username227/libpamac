@@ -187,6 +187,29 @@ class RandomAuditTests(unittest.TestCase):
             self.assertEqual(capped['packages'][0]['n_sources'], 0)
             self.assertEqual(capped['packages'][0]['gitmodules_status'], 'skipped-budget')
 
+    def test_main_freezes_supplied_index_and_writes_results(self):
+        gz = gzip.compress(b'a-git\nb-git\nordinary\n')
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            index = base / 'input-packages.gz'
+            index.write_bytes(gz)
+            destination = base / 'results'
+            pkgtext = 'pkgver() { true; }\n'
+            srctext = 'pkgbase = suite\npkgname = a-git\npkgname = b-git\n'
+            with patch.object(audit, 'rpc_bases', return_value={
+                'a-git': 'suite', 'b-git': 'suite'}), \
+                patch.object(audit, 'snapshot_packagebase', return_value=(pkgtext, srctext, 'c' * 64)), \
+                patch.object(audit.time, 'sleep'), \
+                patch('sys.stdout', new_callable=io.StringIO) as stdout:
+                exit_code = audit.main([
+                    '--index-file', str(index), '--rounds', '1',
+                    '--sample-size', '1', '--seed', '7',
+                    '--output-dir', str(destination)])
+            self.assertEqual(exit_code, 0)
+            self.assertEqual((destination / 'packages.gz').read_bytes(), gz)
+            self.assertEqual(len(json.loads((destination / 'results.json').read_text())['packages']), 1)
+            self.assertIn('ground_truth_validated', stdout.getvalue())
+
     def test_failed_download_not_hidden_or_resampled_and_split_cache(self):
         sample = {'schema': 1, 'rounds': [{'round': 1, 'packages': ['good-git', 'bad-git', 'split-git']}],
                   'negative_controls': [], 'index_sha256': 'a' * 64}
