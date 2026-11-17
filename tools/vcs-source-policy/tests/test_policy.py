@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from vcs_policy import (classify, regenerate, atomic_write_json,
+from vcs_policy import (classify, atomic_write_json,
                         package_policy, package_policies, write_package_policies,
                         validate_kept_policy)
 
@@ -68,49 +68,6 @@ configure_modules() {
         self.assertEqual(record['suggested_monitor'], ['emulator'])
         self.assertEqual(record['monitor'], [])
 
-    def test_overrides_only_if_exact_alias_and_url_match(self):
-        info = srcinfo(sources=('emulator::git+https://example.org/emulator.git',
-                                'other::git+https://example.org/other.git'))
-        row = {'package': 'emulator-git', 'installed_version': 'r2.a-1',
-               'srcinfo': info, 'pkgbuild': SIMPLE}
-        overrides = {'packages': {'emulator-git': {'monitor': [
-            {'alias': 'emulator', 'url': 'https://example.org/emulator.git'}]}}}
-        result = regenerate([row], overrides)['packages']['emulator-git']
-        self.assertEqual(result['classification'], 'user-policy')
-        self.assertEqual(result['monitor'], ['emulator'])
-        self.assertFalse(result['lightweight_check_enabled'])
-        changed = row.copy()
-        changed['srcinfo'] = info.replace('https://example.org/emulator.git',
-                                          'https://evil.invalid/emulator.git')
-        result = regenerate([changed], overrides)['packages']['emulator-git']
-        self.assertEqual(result['classification'], 'inconclusive')
-        self.assertEqual(result['monitor'], [])
-        self.assertTrue(any('Stale override' in x for x in result['reasons']))
-
-    def test_override_invalidated_if_git_branch_changes(self):
-        row = {'package': 'emulator-git', 'installed_version': 'r2.a-1',
-               'srcinfo': srcinfo(sources=(
-                   'emulator::git+https://example.org/emulator.git#branch=main',
-                   'other::git+https://example.org/other.git')),
-               'pkgbuild': SIMPLE}
-        overrides = {'packages': {'emulator-git': {'monitor': [
-            {'alias': 'emulator', 'url': 'https://example.org/emulator.git',
-             'fragment': 'branch=main'}]}}}
-        accepted = regenerate([row], overrides)['packages']['emulator-git']
-        self.assertEqual(accepted['monitor'], ['emulator'])
-        row['srcinfo'] = row['srcinfo'].replace('branch=main', 'branch=testing')
-        rejected = regenerate([row], overrides)['packages']['emulator-git']
-        self.assertEqual(rejected['monitor'], [])
-        self.assertEqual(rejected['classification'], 'inconclusive')
-
-    def test_rebuild_fresh_without_preserving_old_package_entries(self):
-        rows = [{'package': 'emulator-git', 'installed_version': 'r2.a-1',
-                 'srcinfo': srcinfo(), 'pkgbuild': SIMPLE}]
-        first = regenerate(rows)
-        second = regenerate([])
-        self.assertIn('emulator-git', first['packages'])
-        self.assertEqual(second['packages'], {})
-
     def test_pkgbuild_changes_are_detectable(self):
         first = classify(srcinfo(), SIMPLE, 'emulator-git', 'r2.a-1')
         second = classify(srcinfo(), SIMPLE + '\nmakedepends=(cmake)\n', 'emulator-git', 'r2.a-1')
@@ -129,16 +86,6 @@ configure_modules() {
             atomic_write_json(path, {'schema': 1, 'packages': {'a': {}}})
             self.assertEqual(json.loads(path.read_text())['packages'], {'a': {}})
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-
-    def test_split_packages_share_base(self):
-        info = srcinfo(name='common-base')
-        row = lambda name: {'package': name, 'installed_version': 'r2.a-1',
-                            'srcinfo': info, 'pkgbuild': SIMPLE}
-        result = regenerate([row('common-foo-git'), row('common-bar-git')])
-        self.assertEqual(len(result['packages']), 1)
-        self.assertEqual(set(result['packages']['common-base']['installed_packages']),
-                         {'common-foo-git', 'common-bar-git'})
-
 
     def test_all_sources_receive_editable_flags_even_for_verified_package(self):
         info = srcinfo(sources=('emulator::git+https://example.org/emulator.git',
@@ -294,6 +241,42 @@ setup_modules() {
             with self.assertRaises(ValueError):
                 write_package_policies(policies, output, existing='backup')
             self.assertEqual(target.read_text(), 'marker')
+
+
+    def test_one_installed_package_from_twenty_way_split_base(self):
+        """Never fabricate policy files for uninstalled split siblings."""
+        info = srcinfo(name='emulator-suite')
+        selected = {'package': 'emulator-gui-git', 'installed_version': 'r8.abc-1',
+                    'srcinfo': info, 'pkgbuild': SIMPLE}
+        policies = package_policies([selected])
+        self.assertEqual(list(policies), ['emulator-gui-git'])
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            write_package_policies(policies, folder)
+            self.assertEqual([p.name for p in folder.glob('*.json')],
+                             ['emulator-gui-git.json'])
+            saved = json.loads((folder / 'emulator-gui-git.json').read_text())
+            self.assertEqual(saved['package'], 'emulator-gui-git')
+            self.assertEqual(saved['packagebase'], 'emulator-suite')
+
+    def test_regeneration_inventory_does_not_include_removed_split_siblings(self):
+        """A stale old file is inert, but should eventually be pruned safely."""
+        info = srcinfo(name='emulator-suite')
+        def row(name):
+            return {'package': name, 'installed_version': 'r8.abc-1',
+                    'srcinfo': info, 'pkgbuild': SIMPLE}
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            write_package_policies(package_policies(
+                [row('emulator-gui-git'), row('emulator-cli-git')]), folder)
+            next_policies = package_policies([row('emulator-gui-git')])
+            report = write_package_policies(next_policies, folder, existing='keep')
+            self.assertEqual([a['package'] for a in report['actions']],
+                             ['emulator-gui-git'])
+            self.assertEqual(list(next_policies), ['emulator-gui-git'])
+            self.assertTrue((folder / 'emulator-cli-git.json').exists())
+            # Prototype intentionally does not delete old user-edited policy
+            # files; the eventual installed-package resolver must ignore them.
 
 
 
