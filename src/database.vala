@@ -2175,6 +2175,64 @@ namespace Pamac {
 			return Checksum.compute_for_string (ChecksumType.SHA256, state.str);
 		}
 
+		// A responsive GTK update check uses a separate Database instance.
+		// The transaction still uses the manager's original Database, so its
+		// per-instance verified VCS state must be transferred deliberately.
+		//
+		// Call this ONLY after verifying a complete typed update result. In
+		// particular, a read-only coordinator join must first match the
+		// published package names and versions exactly. This method neither
+		// refreshes sources nor permits reuse without all existing guards.
+		public bool adopt_verified_vcs_snapshot (Database checked_database) {
+			if (checked_database == this ||
+				!config.enable_aur || !config.check_aur_updates ||
+				!config.check_aur_vcs_updates ||
+				!checked_database.config.enable_aur ||
+				!checked_database.config.check_aur_updates ||
+				!checked_database.config.check_aur_vcs_updates ||
+				!checked_database.last_vcs_refresh_success ||
+				checked_database.vcs_updates_deferred ||
+				checked_database.recent_vcs_stamp == null ||
+				checked_database.recent_vcs_checked_pkgs == null) {
+				return false;
+			}
+
+			// Preserve the scanner's original timestamp, not the handoff time.
+			// A transfer must never extend the two-minute reuse window.
+			int64 age = GLib.get_monotonic_time () -
+				checked_database.recent_vcs_checked_at;
+			if (age < 0 || age > 2 * TimeSpan.MINUTE) {
+				return false;
+			}
+
+			// Use the same AUR source lock as normal metadata readers. If
+			// another transaction owns it, leave the transaction's existing
+			// full-refresh fallback intact.
+			var source_lock = new AurBuildLock (get_real_aur_build_dir ());
+			if (source_lock.try_acquire_shared () != 1) {
+				return false;
+			}
+			bool accepted = false;
+			lock (alpm_config) {
+				string stamp = vcs_source_stamp ();
+				if (stamp != "" &&
+					stamp == checked_database.recent_vcs_stamp) {
+					var checked_pkgs = checked_database.recent_vcs_checked_pkgs;
+					var copied_pkgs = new GenericSet<string?> (str_hash, str_equal);
+					foreach (unowned string pkgname in checked_pkgs) {
+						copied_pkgs.add (pkgname.dup ());
+					}
+					recent_vcs_stamp = stamp;
+					recent_vcs_checked_at = checked_database.recent_vcs_checked_at;
+					recent_vcs_checked_pkgs = copied_pkgs;
+					last_vcs_refresh_success = true;
+					accepted = true;
+				}
+			}
+			source_lock.release ();
+			return accepted;
+		}
+
 		bool can_reuse_vcs_snapshot (GenericArray<string> needed_vcs_pkgs) {
 			int64 age = GLib.get_monotonic_time () - recent_vcs_checked_at;
 			if (!config.enable_aur || !config.check_aur_updates ||
