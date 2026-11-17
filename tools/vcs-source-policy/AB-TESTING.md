@@ -21,6 +21,15 @@ machine with tens of gigabytes of VCS sources. Existing legacy results may be
 captured from normal user-triggered checks; otherwise, use isolated fixtures
 with explicit disk/network limits. Production Pamac logic remains untouched.
 
+## Pre-merge random AUR corpus
+
+See [RANDOM-AUR-AUDIT.md](RANDOM-AUR-AUDIT.md) for the reproducible
+**3 × 200** random VCS-suffix package classification exercise, separate
+unsuffixed controls, saved PKGBUILD/.SRCINFO samples, and mandatory review
+of proposed submodule exclusions. These tests assess *coverage and static
+classification*, **not** actual upgrade decisions or false-negative rate.
+A successful classification audit is necessary but not sufficient to merge.
+
 ## Test cases required before integration
 
 1. Primary remote Git commit advances: both methods should detect the update
