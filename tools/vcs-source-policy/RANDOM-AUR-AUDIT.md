@@ -95,6 +95,25 @@ Also group failures by packagebase, type of VCS, complexity (single/multi
 source), split packages, and static source fragments. Treat unavailable
 metadata as **inconclusive**, never as a successful `current` result.
 
+## Replay the same 650 archived AUR packages after classifier fixes
+
+The existing audit directory preserves `sample.json` and
+`packaging/<packagebase>/PKGBUILD`, `.SRCINFO`, and retrieved
+`.gitmodules` files. Reprocess these **exact same source texts** offline:
+
+    python3 tools/vcs-source-policy/aur_random_audit.py \
+      --replay /tmp/pamac-vcs-audit-20261117 \
+      --inspect-gitmodules \
+      --output-dir /tmp/pamac-vcs-audit-20261117-replay-v2 \
+      > /tmp/pamac-vcs-audit-20261117-replay-v2-summary.json
+
+The revised results include `source_identification_method` and
+`pkgver_source_reference_confirmed`. An identifiable unique Git source
+is **not** the same as verified version logic or a permitted update check.
+Fixed `#commit=` and `#tag=` sources are reported separately as
+`fixed-source`. No remote source checkout, package build, or installation
+is performed by replay.
+
 ## Required evidence before considering a merge
 
 1. **Broad coverage:** run at least three distinct 200-package rounds, audit
