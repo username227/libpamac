@@ -125,6 +125,8 @@ namespace Pamac {
 			}
 		}
 		public bool check_flatpak_updates { get; set; }
+		// Optional cleanup of unused runtimes after a successful Flatpak removal.
+		public bool remove_unused_flatpak_deps { get; set; }
 		PluginLoader<FlatpakPlugin> flatpak_plugin_loader;
 		public string aur_build_dir { get; set; }
 		public bool check_aur_updates {
@@ -242,6 +244,7 @@ namespace Pamac {
 			enable_appstream = true;
 			enable_snap = false;
 			enable_flatpak = false;
+			remove_unused_flatpak_deps = false;
 			aur_build_dir = "/var/tmp";
 			download_updates = false;
 			max_parallel_downloads = 1;
@@ -337,6 +340,8 @@ namespace Pamac {
 							enable_flatpak = true;
 						} else if (key == "CheckFlatpakUpdates") {
 							check_flatpak_updates = true;
+						} else if (key == "RemoveUnusedFlatpakDeps") {
+							remove_unused_flatpak_deps = true;
 						} else if (key == "BuildDirectory") {
 							if (splitted.length == 2) {
 								aur_build_dir = splitted[1]._strip ();
@@ -393,6 +398,7 @@ namespace Pamac {
 			new_pamac_conf.insert ("EnableSnap", new Variant.boolean (enable_snap));
 			new_pamac_conf.insert ("EnableFlatpak", new Variant.boolean (enable_flatpak));
 			new_pamac_conf.insert ("CheckFlatpakUpdates", new Variant.boolean (check_flatpak_updates));
+			new_pamac_conf.insert ("RemoveUnusedFlatpakDeps", new Variant.boolean (remove_unused_flatpak_deps));
 			try {
 				system_daemon.start_write_pamac_config (new_pamac_conf);
 			} catch (Error e) {
