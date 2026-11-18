@@ -2129,19 +2129,20 @@ namespace Pamac {
 			state.append (alpm_config.dbpath);
 			state.append (config.check_aur_updates ? "aur-on" : "aur-off");
 			state.append (config.check_aur_vcs_updates ? "vcs-on" : "vcs-off");
-			foreach (unowned string ignored in config.ignorepkgs) {
-				state.append (ignored);
-				state.append ("\n");
-			}
+			// Only installed VCS packages and their source files determine
+			// whether a *source* scan is reusable. An unrelated pacman update,
+			// directory mtime change or non-VCS IgnorePkg edit is not a change
+			// to the checked VCS sources. The separate needed_vcs_pkgs
+			// coverage guard still rejects newly enabled/unscanned VCS names.
 			unowned Alpm.List<unowned Alpm.Package> installed = alpm_handle.localdb.pkgcache;
 			while (installed != null) {
 				unowned Alpm.Package pkg = installed.data;
-				state.append (pkg.name);
-				state.append ("=");
-				state.append (pkg.version);
-				state.append ("\n");
 				if (pkg.name.has_suffix ("-git") || pkg.name.has_suffix ("-svn") ||
 					pkg.name.has_suffix ("-hg") || pkg.name.has_suffix ("-bzr")) {
+					state.append (pkg.name);
+					state.append ("=");
+					state.append (pkg.version);
+					state.append ("\n");
 					string[] metadata_files = {".SRCINFO", "PKGBUILD"};
 					foreach (unowned string filename in metadata_files) {
 						string pathname = Path.build_filename (
@@ -2161,17 +2162,10 @@ namespace Pamac {
 				}
 				installed.next ();
 			}
-			// Detect external package transactions even if the ALPM handle
-			// has not yet been reloaded.
-			try {
-				var dir = File.new_for_path (Path.build_filename (alpm_config.dbpath, "local"));
-				var info = dir.query_info (
-					"time::modified,time::modified-usec", FileQueryInfoFlags.NONE);
-				state.append (info.get_attribute_uint64 ("time::modified").to_string ());
-				state.append (info.get_attribute_uint32 ("time::modified-usec").to_string ());
-			} catch (Error e) {
-				return "";
-			}
+			// Transaction.run_alpm_transaction() refreshes its ALPM handle
+			// before requesting VCS updates, so a real installed VCS version
+			// change is seen without treating all pacman package writes as
+			// source invalidations.
 			return Checksum.compute_for_string (ChecksumType.SHA256, state.str);
 		}
 
@@ -2234,20 +2228,43 @@ namespace Pamac {
 		}
 
 		bool can_reuse_vcs_snapshot (GenericArray<string> needed_vcs_pkgs) {
-			int64 age = GLib.get_monotonic_time () - recent_vcs_checked_at;
+			bool debug = Environment.get_variable ("PAMAC_DEBUG_VCS_REUSE") == "1";
 			if (!config.enable_aur || !config.check_aur_updates ||
 				!config.check_aur_vcs_updates || !last_vcs_refresh_success ||
-				recent_vcs_stamp == null || recent_vcs_checked_pkgs == null ||
-				age < 0 || age > 2 * TimeSpan.MINUTE ||
-				recent_vcs_stamp != vcs_source_stamp ()) {
+				recent_vcs_stamp == null || recent_vcs_checked_pkgs == null) {
+				if (debug) {
+					message ("VCS source reuse rejected: no complete verified source snapshot or AUR/VCS disabled");
+				}
 				return false;
 			}
-			// AUR ignore selections after the check can only shrink the
-			// source set. A newly included VCS package must be rescanned.
+			int64 age = GLib.get_monotonic_time () - recent_vcs_checked_at;
+			if (age < 0 || age > 2 * TimeSpan.MINUTE) {
+				if (debug) {
+					message ("VCS source reuse rejected: age %.1f seconds outside 120-second window",
+						(double) age / (double) TimeSpan.SECOND);
+				}
+				return false;
+			}
+			string stamp = vcs_source_stamp ();
+			if (stamp == "" || recent_vcs_stamp != stamp) {
+				if (debug) {
+					message ("VCS source reuse rejected: installed VCS versions or source metadata changed");
+				}
+				return false;
+			}
+			// AUR ignore selections after the check may shrink the source set.
+			// Newly included development packages must receive their own scan.
 			foreach (unowned string name in needed_vcs_pkgs) {
 				if (!recent_vcs_checked_pkgs.contains (name)) {
+					if (debug) {
+						message ("VCS source reuse rejected: unscanned VCS package %s", name);
+					}
 					return false;
 				}
+			}
+			if (debug) {
+				message ("VCS source reuse accepted: %u packages, %.1f seconds old",
+					needed_vcs_pkgs.length, (double) age / (double) TimeSpan.SECOND);
 			}
 			return true;
 		}
