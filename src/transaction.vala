@@ -1368,6 +1368,10 @@ namespace Pamac {
 			}
 			if (sysupgrading) {
 				if (config.check_aur_updates) {
+					// Reopen the installed-package database before validating the
+					// VCS-only source fingerprint. An external VCS package upgrade
+					// must invalidate the snapshot; unrelated pacman changes must not.
+					database.refresh ();
 					// The sole AUR update query now refreshes VCS sources itself.
 					// Await it before selecting any build candidates.
 					if (config.check_aur_vcs_updates) {
