@@ -2178,6 +2178,7 @@ namespace Pamac {
 		// published package names and versions exactly. This method neither
 		// refreshes sources nor permits reuse without all existing guards.
 		public bool adopt_verified_vcs_snapshot (Database checked_database) {
+			bool debug = Environment.get_variable ("PAMAC_DEBUG_VCS_REUSE") == "1";
 			if (checked_database == this ||
 				!config.enable_aur || !config.check_aur_updates ||
 				!config.check_aur_vcs_updates ||
@@ -2188,6 +2189,9 @@ namespace Pamac {
 				checked_database.vcs_updates_deferred ||
 				checked_database.recent_vcs_stamp == null ||
 				checked_database.recent_vcs_checked_pkgs == null) {
+				if (debug) {
+					message ("VCS snapshot handoff rejected: missing verified scan or AUR/VCS profile mismatch");
+				}
 				return false;
 			}
 
@@ -2196,6 +2200,10 @@ namespace Pamac {
 			int64 age = GLib.get_monotonic_time () -
 				checked_database.recent_vcs_checked_at;
 			if (age < 0 || age > 2 * TimeSpan.MINUTE) {
+				if (debug) {
+					message ("VCS snapshot handoff rejected: age %.1f seconds outside 120-second window",
+						(double) age / (double) TimeSpan.SECOND);
+				}
 				return false;
 			}
 
@@ -2204,6 +2212,9 @@ namespace Pamac {
 			// full-refresh fallback intact.
 			var source_lock = new AurBuildLock (get_real_aur_build_dir ());
 			if (source_lock.try_acquire_shared () != 1) {
+				if (debug) {
+					message ("VCS snapshot handoff rejected: AUR source lock unavailable");
+				}
 				return false;
 			}
 			bool accepted = false;
@@ -2224,6 +2235,11 @@ namespace Pamac {
 				}
 			}
 			source_lock.release ();
+			if (debug) {
+				message (accepted ?
+					"VCS snapshot handoff accepted" :
+					"VCS snapshot handoff rejected: VCS installed-version/source fingerprint changed");
+			}
 			return accepted;
 		}
 
