@@ -38,6 +38,8 @@ namespace Pamac {
 		GenericSet<string?> clone_files;
 		GenericSet<string?> clone_deps_files;
 		GenericSet<string?> ignorepkgs;
+		// One-transaction exceptions to IgnorePkg explicitly selected in GTK.
+		GenericSet<string?> explicitly_selected_ignored_updates;
 		GenericSet<string?> overwrite_files;
 		GenericSet<string?> to_install_as_dep;
 		HashTable<string, SnapPackage> snap_to_install;
@@ -125,6 +127,7 @@ namespace Pamac {
 			clone_files = new GenericSet<string?> (str_hash, str_equal);
 			clone_deps_files = new GenericSet<string?> (str_hash, str_equal);
 			ignorepkgs = new GenericSet<string?> (str_hash, str_equal);
+			explicitly_selected_ignored_updates = new GenericSet<string?> (str_hash, str_equal);
 			overwrite_files = new GenericSet<string?> (str_hash, str_equal);
 			to_install_as_dep = new GenericSet<string?> (str_hash, str_equal);
 			alpm_utils.choose_provider.connect (choose_provider_real);
@@ -1232,6 +1235,7 @@ namespace Pamac {
 				clone_files.remove_all ();
 				clone_deps_files.remove_all ();
 				ignorepkgs.remove_all ();
+				explicitly_selected_ignored_updates.remove_all ();
 				overwrite_files.remove_all ();
 				to_install_as_dep.remove_all ();
 				// The lock remains held through the last build and installation.
@@ -1341,8 +1345,16 @@ namespace Pamac {
 		}
 
 		void add_config_ignore_pkgs () {
+			// Configuration may have been reloaded during database refresh.
+			// Apply explicit one-time selections AFTER loading its IgnorePkg set,
+			// keeping /etc/pacman.conf and all other exclusions untouched.
 			foreach (unowned string name in config.ignorepkgs) {
-				ignorepkgs.add (name);
+				if (!explicitly_selected_ignored_updates.contains (name)) {
+					ignorepkgs.add (name);
+				}
+			}
+			foreach (unowned string name in explicitly_selected_ignored_updates) {
+				ignorepkgs.remove (name);
 			}
 		}
 
@@ -1427,7 +1439,7 @@ namespace Pamac {
 						emit_action (dgettext (null, "Checking development package sources") + "...");
 					}
 					var updates = yield database.get_aur_updates_async (
-						ignorepkgs, reuse_recent_vcs_sources);
+						ignorepkgs, reuse_recent_vcs_sources, explicitly_selected_ignored_updates);
 					if (database.last_vcs_scan_reused) {
 						emit_action (dgettext (null, "Reused recently checked development package sources") + ".");
 					}
@@ -1918,6 +1930,11 @@ namespace Pamac {
 
 		public void add_temporary_ignore_pkg (string name) {
 			ignorepkgs.add (name);
+		}
+
+		public void add_explicitly_selected_ignored_update (string name) {
+			// Only the current upgrade may override a persistent IgnorePkg.
+			explicitly_selected_ignored_updates.add (name);
 		}
 
 		public void add_overwrite_file (string glob) {
