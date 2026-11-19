@@ -440,11 +440,49 @@ namespace Pamac {
 			already_checked_aur_dep.remove_all ();
 			// Keep one consistent SRCINFO snapshot per package base.
 			var refreshed_srcinfo_bases = new GenericSet<string?> (str_hash, str_equal);
+			// Collect all binary outputs and current versions from each visited AUR base.
+			var candidate_bases = new HashTable<string, string> (str_hash, str_equal);
+			var candidate_versions = new HashTable<string, string> (str_hash, str_equal);
 			var to_build_array = new GenericArray<string> ();
 			foreach (unowned string pkgname in to_build) {
 				to_build_array.add (pkgname);
 			}
-			bool success = yield check_aur_dep_list (to_build_array, refreshed_srcinfo_bases);
+			bool success = yield check_aur_dep_list (to_build_array,
+				refreshed_srcinfo_bases, candidate_bases, candidate_versions);
+			if (success) {
+				// A split PKGBUILD builds all outputs, but only selected targets are
+				// installed. Include outdated installed siblings from selected bases
+				// so exact-version dependencies are checked as one ALPM transaction.
+				var selected_bases = new GenericSet<string?> (str_hash, str_equal);
+				foreach (unowned string name in to_build) {
+					unowned string? base = candidate_bases.lookup (name);
+					if (base != null) {
+						selected_bases.add (base.dup ());
+					}
+				}
+				var siblings = HashTableIter<string, string> (candidate_bases);
+				unowned string sibling;
+				unowned string sibling_base;
+				while (siblings.next (out sibling, out sibling_base)) {
+					if (!selected_bases.contains (sibling_base) ||
+						to_build.contains (sibling) ||
+						ignorepkgs.contains (sibling) ||
+						config.ignorepkgs.contains (sibling)) {
+						continue;
+					}
+					unowned AlpmPackage? installed = database.get_installed_pkg (sibling);
+					unowned string? candidate_version = candidate_versions.lookup (sibling);
+					if (installed != null && installed.installed_version != null &&
+						candidate_version != null &&
+						Alpm.pkg_vercmp (candidate_version, installed.installed_version) > 0) {
+						// No compatibility assumptions or auto-removal: libalpm
+						// still validates the complete package selection.
+						to_build.add (sibling.dup ());
+						emit_script_output (dgettext (null,
+							"Including related installed split package %s in this AUR upgrade").printf (sibling));
+					}
+				}
+			}
 			if (success && aur_desc_list.length > 0) {
 				// create a fake aur db
 				string tmp_aurdb_path = "%s/pamac_aur.db".printf (tmp_path);
@@ -472,7 +510,9 @@ namespace Pamac {
 		}
 
 		async bool check_aur_dep_list (GenericArray<string> pkgnames,
-											GenericSet<string?> refreshed_srcinfo_bases) {
+				GenericSet<string?> refreshed_srcinfo_bases,
+				HashTable<string, string> candidate_bases,
+				HashTable<string, string> candidate_versions) {
 			var dep_to_check = new GenericArray<string> ();
 			var to_get_from_aur = new GenericArray<string> ();
 			foreach (unowned string pkgname in pkgnames) {
@@ -747,6 +787,10 @@ namespace Pamac {
 						// create fake aur db entries
 						foreach (unowned string pkgname_found in pkgnames_found) {
 							unowned AURPackage? aur_pkg_found = pkgnames_table.get (pkgname_found);
+							if (aur_pkg_found.packagebase != null) {
+								candidate_bases.insert (pkgname_found.dup (), aur_pkg_found.packagebase.dup ());
+								candidate_versions.insert (pkgname_found.dup (), aur_pkg_found.version.dup ());
+							}
 							// populate empty list will global ones
 							if (global_depends.length != 0 && aur_pkg_found.depends.length == 0) {
 								aur_pkg_found.depends = global_depends.copy (strdup);
@@ -853,6 +897,10 @@ namespace Pamac {
 				} else {
 					// use aur infos
 					already_checked_aur_dep.add (aur_pkg.name);
+					if (aur_pkg.packagebase != null) {
+						candidate_bases.insert (aur_pkg.name.dup (), aur_pkg.packagebase.dup ());
+						candidate_versions.insert (aur_pkg.name.dup (), aur_pkg.version.dup ());
+					}
 					// write desc file
 					try {
 						string pkgdir = "%s-%s".printf (aur_pkg.name, aur_pkg.version);
@@ -985,7 +1033,8 @@ namespace Pamac {
 				}
 			}
 			if (dep_to_check.length > 0) {
-				return yield check_aur_dep_list (dep_to_check, refreshed_srcinfo_bases);
+				return yield check_aur_dep_list (dep_to_check,
+					refreshed_srcinfo_bases, candidate_bases, candidate_versions);
 			}
 			return true;
 		}
