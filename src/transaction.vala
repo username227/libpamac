@@ -455,9 +455,9 @@ namespace Pamac {
 				// so exact-version dependencies are checked as one ALPM transaction.
 				var selected_bases = new GenericSet<string?> (str_hash, str_equal);
 				foreach (unowned string name in to_build) {
-					unowned string? base = candidate_bases.lookup (name);
-					if (base != null) {
-						selected_bases.add (base.dup ());
+					unowned string? package_base = candidate_bases.lookup (name);
+					if (package_base != null) {
+						selected_bases.add (package_base.dup ());
 					}
 				}
 				var siblings = HashTableIter<string, string> (candidate_bases);
