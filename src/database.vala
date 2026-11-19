@@ -2767,7 +2767,8 @@ namespace Pamac {
 		}
 
 		internal async Updates get_aur_updates_async (
-			GenericSet<string?> ignorepkgs, bool reuse_recent_vcs_sources = false) {
+			GenericSet<string?> ignorepkgs, bool reuse_recent_vcs_sources = false,
+			GenericSet<string?>? explicitly_selected_ignored_updates = null) {
 			last_vcs_scan_reused = false;
 			var updates = new Updates ();
 			try {
@@ -2776,6 +2777,16 @@ namespace Pamac {
 						// get local pkgs
 						var local_pkgs = new GenericArray<string> ();
 						var vcs_local_pkgs = new GenericArray<string> ();
+						// This ALPM handle was rebuilt from /etc/pacman.conf.
+						// Temporarily lift only explicit GTK update selections so
+						// ignored AUR/VCS candidates are included in discovery.
+						if (explicitly_selected_ignored_updates != null) {
+							foreach (unowned string name in explicitly_selected_ignored_updates) {
+								if (config.ignorepkgs.contains (name)) {
+									alpm_handle.remove_ignorepkg (name);
+								}
+							}
+						}
 						// add ignorepkgs
 						foreach (unowned string name in ignorepkgs) {
 							alpm_handle.add_ignorepkg (name);
@@ -2825,9 +2836,16 @@ namespace Pamac {
 							}
 							get_aur_updates_real (aur_plugin.get_multi_infos (local_pkgs), vcs_local_pkgs, ref updates);
 						}
-						// remove ignorepkgs
+						// Restore the configured ignores after this read-only scan.
 						foreach (unowned string name in ignorepkgs) {
 							alpm_handle.remove_ignorepkg (name);
+						}
+						if (explicitly_selected_ignored_updates != null) {
+							foreach (unowned string name in explicitly_selected_ignored_updates) {
+								if (config.ignorepkgs.contains (name)) {
+									alpm_handle.add_ignorepkg (name);
+								}
+							}
 						}
 					}
 					context.invoke (get_aur_updates_async.callback);
